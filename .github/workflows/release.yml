@@ -1,0 +1,74 @@
+name: "Publish Release"
+
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  publish-tauri:
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: "macos-latest" # for Apple Silicon and Intel
+            args: "--target universal-apple-darwin"
+          - platform: "ubuntu-22.04" # for Debian/Ubuntu
+            args: ""
+          - platform: "windows-latest" # for Windows
+            args: ""
+
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: setup node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          # Those targets are only needed on macos desktop builds
+          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+
+      - name: install dependencies (ubuntu only)
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.0-dev libappindicator3-dev librsvg2-dev patchelf rpm
+
+      - name: install frontend dependencies
+        run: pnpm install
+
+      - name: build and publish
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: "OtoMusic v__VERSION__"
+          releaseBody: "See the assets below to download the latest version of OtoMusic."
+          releaseDraft: true
+          prerelease: false
+          args: ${{ matrix.args }}
+
+      # 针对 Linux 平台额外打包一个通用的 .tar.gz 二进制包 (方案二)
+      - name: package generic linux binary
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          cd src-tauri/target/release
+          mv OtoMusic otomusic
+          tar -czf otomusic-linux-x64.tar.gz otomusic
+          # 使用 gh release upload 手动上传到刚创建的 release
+          gh release upload ${{ github.ref_name }} otomusic-linux-x64.tar.gz --clobber
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
