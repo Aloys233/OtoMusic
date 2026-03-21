@@ -1,7 +1,7 @@
 {
   "name": "otomusic",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.0.2",
   "type": "module",
   "scripts": {
     "dev": "vite --host --port 1420",
@@ -10,7 +10,8 @@
     "typecheck": "tsc --noEmit",
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
-    "tauri:build": "tauri build"
+    "tauri:build": "tauri build",
+    "tauri:build:linux": "tauri build --bundles deb,rpm,appimage"
   },
   "dependencies": {
     "@radix-ui/react-separator": "^1.1.7",

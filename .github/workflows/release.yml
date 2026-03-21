@@ -14,11 +14,11 @@ jobs:
       matrix:
         include:
           - platform: "macos-latest" # for Apple Silicon and Intel
-            args: "--target universal-apple-darwin"
+            args: "--target universal-apple-darwin --bundles app,dmg"
           - platform: "ubuntu-22.04" # for Debian/Ubuntu
-            args: ""
+            args: "--bundles deb,rpm,appimage"
           - platform: "windows-latest" # for Windows
-            args: ""
+            args: "--bundles nsis,msi"
 
     runs-on: ${{ matrix.platform }}
     steps:
@@ -44,7 +44,7 @@ jobs:
         if: matrix.platform == 'ubuntu-22.04'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.0-dev libappindicator3-dev librsvg2-dev patchelf rpm
+          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev libsoup-3.0-dev libappindicator3-dev librsvg2-dev patchelf rpm
 
       - name: install frontend dependencies
         run: pnpm install
@@ -66,7 +66,7 @@ jobs:
         if: matrix.platform == 'ubuntu-22.04'
         run: |
           cd src-tauri/target/release
-          mv OtoMusic otomusic
+          if [ -f OtoMusic ]; then mv OtoMusic otomusic; fi
           tar -czf otomusic-linux-x64.tar.gz otomusic
           # 使用 gh release upload 手动上传到刚创建的 release
           gh release upload ${{ github.ref_name }} otomusic-linux-x64.tar.gz --clobber
