@@ -24,18 +24,19 @@ jobs:
             args: "--win nsis msi --x64"
 
     runs-on: ${{ matrix.platform }}
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     steps:
       - uses: actions/checkout@v4
 
       - name: setup node
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 24
 
       - name: install pnpm
         uses: pnpm/action-setup@v4
-        with:
-          version: 10
+        # 不再硬编码版本，让它自动读取或使用最新的兼容版本
 
       - name: install dependencies (ubuntu only)
         if: matrix.platform == 'ubuntu-22.04'
