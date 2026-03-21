@@ -1,26 +1,21 @@
 import { useEffect } from "react";
 
-import { listen } from "@tauri-apps/api/event";
-
 import { audioEngine } from "@/lib/audio/AudioEngine";
+import { isElectronRuntime, listenTrayAction } from "@/lib/desktop-api";
 import { usePlayerStore } from "@/stores/player-store";
-
-const isTauriRuntime =
-  typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
-
-type TrayAction = "show" | "play-pause" | "next" | "previous";
 
 export function useTrayControls() {
   useEffect(() => {
-    if (!isTauriRuntime) {
+    if (!isElectronRuntime()) {
       return;
     }
 
-    let unlisten: (() => void) | undefined;
-
-    void listen<TrayAction>("tray-action", async (event) => {
-      const action = event.payload;
+    const unlisten = listenTrayAction(async (action) => {
       const state = usePlayerStore.getState();
+
+      if (action === "show") {
+        return;
+      }
 
       if (action === "play-pause") {
         if (!state.currentTrack?.streamUrl) {
@@ -51,12 +46,10 @@ export function useTrayControls() {
           usePlayerStore.getState().setPlaying(true);
         }
       }
-    }).then((off) => {
-      unlisten = off;
     });
 
     return () => {
-      unlisten?.();
+      unlisten();
     };
   }, []);
 }

@@ -6,7 +6,7 @@ on:
       - "v*"
 
 jobs:
-  publish-tauri:
+  publish-electron:
     permissions:
       contents: write
     strategy:
@@ -15,13 +15,13 @@ jobs:
         include:
           - platform: "macos-latest"
             os_name: "macos"
-            args: "--target universal-apple-darwin"
+            args: "--mac dmg --universal"
           - platform: "ubuntu-22.04"
             os_name: "linux"
-            args: ""
+            args: "--linux AppImage deb rpm --x64"
           - platform: "windows-latest"
             os_name: "windows"
-            args: ""
+            args: "--win nsis msi --x64"
 
     runs-on: ${{ matrix.platform }}
     steps:
@@ -35,42 +35,41 @@ jobs:
       - name: install pnpm
         uses: pnpm/action-setup@v4
         with:
-          version: 9
-
-      - name: install Rust stable
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+          version: 10
 
       - name: install dependencies (ubuntu only)
         if: matrix.platform == 'ubuntu-22.04'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf rpm
+          sudo apt-get install -y rpm
 
       - name: install frontend dependencies
-        run: pnpm install
+        run: pnpm install --frozen-lockfile
 
-      - name: build tauri project
-        run: pnpm tauri build ${{ matrix.args }}
+      - name: build electron project
+        run: |
+          pnpm build
+          pnpm exec electron-builder ${{ matrix.args }} --publish never
 
       - name: rename and prepare assets
         shell: bash
         run: |
           mkdir -p artifacts
           if [ "${{ matrix.os_name }}" = "windows" ]; then
-            # 找到 MSI 安装包
-            cp src-tauri/target/release/bundle/msi/*.msi artifacts/otomusic-windows-x64-setup.msi || true
-            # 找到 NSIS 安装版 EXE
-            cp src-tauri/target/release/bundle/nsis/*.exe artifacts/otomusic-windows-x64-setup.exe || true
+            MSI_PATH=$(find release -name "*.msi" -type f | head -n 1)
+            EXE_PATH=$(find release -name "*.exe" -type f | head -n 1)
+            if [ -n "$MSI_PATH" ]; then cp "$MSI_PATH" artifacts/otomusic-windows-x64-setup.msi; fi
+            if [ -n "$EXE_PATH" ]; then cp "$EXE_PATH" artifacts/otomusic-windows-x64-setup.exe; fi
           elif [ "${{ matrix.os_name }}" = "macos" ]; then
-            cp src-tauri/target/release/bundle/dmg/*.dmg artifacts/otomusic-macos-universal.dmg || true
+            DMG_PATH=$(find release -name "*.dmg" -type f | head -n 1)
+            if [ -n "$DMG_PATH" ]; then cp "$DMG_PATH" artifacts/otomusic-macos-universal.dmg; fi
           elif [ "${{ matrix.os_name }}" = "linux" ]; then
-            ls -R src-tauri/target/release/ || true
-            cp src-tauri/target/release/bundle/deb/*.deb artifacts/otomusic-linux-amd64.deb || true
-            cp src-tauri/target/release/bundle/rpm/*.rpm artifacts/otomusic-linux-x86_64.rpm || true
-            cp src-tauri/target/release/bundle/appimage/*.AppImage artifacts/otomusic-linux-x86_64.AppImage || true
-            tar -czf artifacts/otomusic-linux-x86_64.tar.gz -C src-tauri/target/release otomusic
+            DEB_PATH=$(find release -name "*.deb" -type f | head -n 1)
+            RPM_PATH=$(find release -name "*.rpm" -type f | head -n 1)
+            APPIMAGE_PATH=$(find release -name "*.AppImage" -type f | head -n 1)
+            if [ -n "$DEB_PATH" ]; then cp "$DEB_PATH" artifacts/otomusic-linux-amd64.deb; fi
+            if [ -n "$RPM_PATH" ]; then cp "$RPM_PATH" artifacts/otomusic-linux-x86_64.rpm; fi
+            if [ -n "$APPIMAGE_PATH" ]; then cp "$APPIMAGE_PATH" artifacts/otomusic-linux-x86_64.AppImage; fi
           fi
 
       - name: upload release

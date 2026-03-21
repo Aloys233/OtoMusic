@@ -1,7 +1,10 @@
 # Node.js
 node_modules/
 dist/
+dist-electron/
 dist-ssr/
+electron/*.js
+electron/*.d.ts
 *.local
 npm-debug.log*
 yarn-debug.log*
@@ -9,10 +12,6 @@ yarn-error.log*
 pnpm-debug.log*
 package-lock.json
 # pnpm-lock.yaml # 根据习惯通常建议保留 lock 文件，除非您特别要求忽略
-
-# Rust / Tauri
-src-tauri/target/
-src-tauri/gen/
 
 # Environment Variables
 .env

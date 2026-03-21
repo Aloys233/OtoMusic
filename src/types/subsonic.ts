@@ -3,6 +3,7 @@ export type SubsonicAlbum = {
   name: string;
   artist?: string;
   artistId?: string;
+  genre?: string;
   songCount?: number;
   duration?: number;
   coverArt?: string;
@@ -20,6 +21,7 @@ export type SubsonicSong = {
   duration?: number;
   track?: number;
   year?: number;
+  genre?: string;
   contentType?: string;
   suffix?: string;
   bitRate?: number;

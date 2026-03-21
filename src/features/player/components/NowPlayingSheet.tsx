@@ -1,6 +1,6 @@
 import { motion } from "framer-motion";
 import { ListMusic, Loader2, Music4, X } from "lucide-react";
-import { useEffect, useState } from "react";
+import { type CSSProperties, useEffect, useState } from "react";
 
 import type { LyricsData } from "@/lib/api/subsonic-client";
 import { useDominantColor } from "@/hooks/use-dominant-color";
@@ -39,6 +39,9 @@ export function NowPlayingSheet({
   onClose,
   onSelectTrack,
 }: NowPlayingSheetProps) {
+  const noDragRegionStyle: CSSProperties = {
+    WebkitAppRegion: "no-drag" as CSSProperties["WebkitAppRegion"],
+  };
   const hasLyrics = lyrics.text.trim().length > 0;
   const [queueOpen, setQueueOpen] = useState(false);
   const [highResLoaded, setHighResLoaded] = useState(false);
@@ -104,6 +107,7 @@ export function NowPlayingSheet({
       animate={{ y: 0 }}
       transition={{ duration: 0.36, ease: [0.22, 1, 0.36, 1] }}
       className="absolute inset-0 z-[60] overflow-hidden"
+      style={noDragRegionStyle}
     >
           <div className="absolute inset-0 scale-110">
             <div

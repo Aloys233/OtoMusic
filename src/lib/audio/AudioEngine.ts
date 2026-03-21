@@ -4,6 +4,11 @@ type ReplayGainOptions = {
   preferAlbumGain?: boolean;
 };
 
+type SinkAwareAudioElement = HTMLAudioElement & {
+  setSinkId?: (sinkId: string) => Promise<void>;
+  sinkId?: string;
+};
+
 export class AudioEngine {
   private static instance: AudioEngine;
 
@@ -15,11 +20,15 @@ export class AudioEngine {
 
   private replayGainNode: GainNode | null = null;
 
+  private preampGainNode: GainNode | null = null;
+
   private masterGainNode: GainNode | null = null;
 
   private initPromise: Promise<void> | null = null;
 
   private targetVolume = 0.75;
+
+  private preampGainDb = 0;
 
   private readonly fadeDuration = 0.2;
 
@@ -123,6 +132,65 @@ export class AudioEngine {
     this.replayGainNode.gain.setTargetAtTime(linearGain, now, 0.03);
   }
 
+  setPreampGainDb(db: number) {
+    const safeDb = Number.isFinite(db) ? Math.max(-12, Math.min(12, db)) : 0;
+    this.preampGainDb = safeDb;
+    const linearGain = Math.pow(10, safeDb / 20);
+
+    if (!this.context || !this.preampGainNode) {
+      return;
+    }
+
+    const now = this.context.currentTime;
+    this.preampGainNode.gain.cancelScheduledValues(now);
+    this.preampGainNode.gain.setTargetAtTime(linearGain, now, 0.03);
+  }
+
+  getPreampGainDb() {
+    return this.preampGainDb;
+  }
+
+  async getOutputDevices() {
+    if (
+      typeof navigator === "undefined" ||
+      !navigator.mediaDevices ||
+      typeof navigator.mediaDevices.enumerateDevices !== "function"
+    ) {
+      return [];
+    }
+
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    return devices.filter((device) => device.kind === "audiooutput");
+  }
+
+  supportsOutputDeviceSelection() {
+    if (
+      typeof navigator === "undefined" ||
+      !navigator.mediaDevices ||
+      typeof navigator.mediaDevices.enumerateDevices !== "function"
+    ) {
+      return false;
+    }
+
+    if (typeof window === "undefined") {
+      return false;
+    }
+
+    return "setSinkId" in window.HTMLMediaElement.prototype;
+  }
+
+  async setOutputDevice(deviceId: string) {
+    await this.ensureInitialized();
+    const { mediaElement } = this.getNodes();
+    const sinkAwareElement = mediaElement as SinkAwareAudioElement;
+
+    if (typeof sinkAwareElement.setSinkId !== "function") {
+      throw new Error("当前环境不支持音频输出设备切换");
+    }
+
+    await sinkAwareElement.setSinkId(deviceId);
+  }
+
   getCurrentTime() {
     return this.mediaElement?.currentTime ?? 0;
   }
@@ -166,19 +234,23 @@ export class AudioEngine {
 
       const sourceNode = context.createMediaElementSource(mediaElement);
       const replayGainNode = context.createGain();
+      const preampGainNode = context.createGain();
       const masterGainNode = context.createGain();
 
       replayGainNode.gain.value = 1;
+      preampGainNode.gain.value = Math.pow(10, this.preampGainDb / 20);
       masterGainNode.gain.value = this.targetVolume;
 
       sourceNode.connect(replayGainNode);
-      replayGainNode.connect(masterGainNode);
+      replayGainNode.connect(preampGainNode);
+      preampGainNode.connect(masterGainNode);
       masterGainNode.connect(context.destination);
 
       this.context = context;
       this.mediaElement = mediaElement;
       this.sourceNode = sourceNode;
       this.replayGainNode = replayGainNode;
+      this.preampGainNode = preampGainNode;
       this.masterGainNode = masterGainNode;
     })();
 
@@ -191,6 +263,7 @@ export class AudioEngine {
       !this.mediaElement ||
       !this.sourceNode ||
       !this.replayGainNode ||
+      !this.preampGainNode ||
       !this.masterGainNode
     ) {
       throw new Error("AudioEngine is not initialized");
@@ -201,6 +274,7 @@ export class AudioEngine {
       mediaElement: this.mediaElement,
       sourceNode: this.sourceNode,
       replayGainNode: this.replayGainNode,
+      preampGainNode: this.preampGainNode,
       masterGainNode: this.masterGainNode,
     };
   }

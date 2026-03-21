@@ -25,8 +25,41 @@ body {
   font-family: "SF Pro Text", "PingFang SC", "Microsoft YaHei", sans-serif;
   background: var(--window-bg);
   overflow: hidden;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
 * {
   box-sizing: border-box;
+}
+
+/* 主滚动容器：不要在滚动容器上加 will-change/contain，会干扰原生滚动优化 */
+main {
+  overflow-y: auto;
+  scroll-behavior: auto !important;
+}
+
+/* 极简滚动条 */
+.scrollbar-thin::-webkit-scrollbar {
+  width: 4px;
+}
+
+.scrollbar-thin::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.1);
+  border-radius: 10px;
+}
+
+.dark .scrollbar-thin::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.15);
+}
+
+/* 利用 content-visibility 让浏览器跳过屏幕外元素的渲染（Chromium 原生支持） */
+.album-grid-item {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 240px; /* 估算高度，避免滚动条跳动 */
+}
+
+.song-list-item {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 48px;
 }

@@ -292,8 +292,8 @@ export function AppleMusicLyrics({
     setActiveWaitingGapKey(null);
 
     const syncActiveLine = () => {
-      // 减去 0.5s 补偿，让歌词比原始时间轴稍微延迟一点点显示，以对齐听感
-      const currentTime = audioEngine.getCurrentTime() - 0.5;
+      // 减去 0s 补偿，让歌词比原始时间轴稍微延迟一点点显示，以对齐听感
+      const currentTime = audioEngine.getCurrentTime() - 0;
       const nextLineIndex = resolveActiveLineIndex(lyricLines, currentTime);
       let nextWaitingGapKey: number | null = null;
 

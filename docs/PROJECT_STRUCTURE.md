@@ -53,12 +53,11 @@
 │   │   ├── spark-md5.d.ts
 │   │   └── subsonic.ts
 │   └── vite-env.d.ts
-├── src-tauri/
-│   ├── Cargo.toml
-│   ├── src/
-│   │   ├── lib.rs
-│   │   └── main.rs
-│   └── tauri.conf.json
+├── electron/
+│   ├── assets/
+│   │   └── icon.png
+│   ├── main.ts
+│   └── preload.ts
 ├── tailwind.config.ts
 ├── tsconfig.app.json
 ├── tsconfig.json
@@ -76,7 +75,7 @@
 - `features/library/hooks`：TanStack Query 的专辑与歌曲缓存查询。
 - `hooks/use-dominant-color.ts`：封面主色提取并驱动主内容区动态光晕。
 
-## Tauri 窗口说明
+## Electron 窗口说明
 
-- 当前按你的要求改为非透明窗口：`transparent: false`、`decorations: true`。
-- 若后续恢复文档原始目标，再切回：`transparent: true`、`decorations: false`。
+- 当前使用无边框窗口（`frame: false`）+ 前端标题栏。
+- 标题栏拖拽采用 `-webkit-app-region: drag`，窗口控制通过 preload IPC 转发到主进程。

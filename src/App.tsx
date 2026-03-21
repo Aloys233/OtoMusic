@@ -1,10 +1,21 @@
 import { useQueryClient } from "@tanstack/react-query";
-import { motion } from "framer-motion";
-import { ArrowLeft, Clock3, Disc3, ListMusic, Loader2, Sparkles } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import {
+  ArrowLeft,
+  CalendarDays,
+  Clock3,
+  Disc3,
+  ListMusic,
+  Loader2,
+  Mic2,
+  Music2,
+  Shuffle,
+  Tags,
+} from "lucide-react";
+import { useEffect, useMemo, useState, useCallback, useRef } from "react";
 
 import { LoginPanel } from "@/features/auth/components/LoginPanel";
 import { PlayerBar } from "@/components/layout/PlayerBar";
+import { SettingsPanel } from "@/components/layout/SettingsPanel";
 import { Sidebar } from "@/components/layout/Sidebar";
 import { WindowTitlebar } from "@/components/layout/WindowTitlebar";
 import { Button } from "@/components/ui/button";
@@ -14,10 +25,12 @@ import { useAlbumList } from "@/features/library/hooks/use-album-list";
 import { useAlbumSongs } from "@/features/library/hooks/use-album-songs";
 import { useGlobalSearch } from "@/features/library/hooks/use-global-search";
 import { useLyrics } from "@/features/library/hooks/use-lyrics";
+import { AlbumGridItem } from "@/features/library/components/AlbumGridItem";
+import { SongListItem } from "@/features/library/components/SongListItem";
 import { NowPlayingSheet } from "@/features/player/components/NowPlayingSheet";
 import { mapSongToTrackInfo } from "@/features/player/utils/map-subsonic-song";
-import { useDominantColor } from "@/hooks/use-dominant-color";
 import { useMediaSession } from "@/hooks/use-media-session";
+import { useSmoothScroll } from "@/hooks/use-smooth-scroll";
 import { useTrayControls } from "@/hooks/use-tray-controls";
 import { createSubsonicClient } from "@/lib/api/client";
 import { cn } from "@/lib/utils";
@@ -26,19 +39,15 @@ import { type LibraryNavSection, useLibraryStore } from "@/stores/library-store"
 import { usePlayerStore } from "@/stores/player-store";
 import type { SubsonicAlbum } from "@/types/subsonic";
 
-const ALBUM_SCROLL_HEIGHT = 560;
-const ALBUM_ROW_HEIGHT = 258;
-const ALBUM_OVERSCAN_ROWS = 2;
-const SONG_SCROLL_HEIGHT = 360;
-const SONG_ROW_HEIGHT = 56;
-const SONG_OVERSCAN_ROWS = 8;
 
 type AlbumCard = {
   id: string;
   title: string;
   artist: string;
+  genre?: string;
   coverArt?: string;
   songCount?: number;
+  duration?: number;
   year?: number;
   createdAt: number;
 };
@@ -57,8 +66,10 @@ function toCardItem(album: SubsonicAlbum): AlbumCard {
     id: album.id,
     title: album.name,
     artist: album.artist ?? "Unknown Artist",
+    genre: album.genre,
     coverArt: album.coverArt,
     songCount: album.songCount,
+    duration: album.duration,
     year: album.year,
     createdAt: parseAlbumCreatedAt(album.created),
   };
@@ -69,6 +80,27 @@ function formatTime(totalSeconds: number) {
   const minutes = Math.floor(safeSeconds / 60);
   const seconds = safeSeconds % 60;
   return `${minutes}:${seconds.toString().padStart(2, "0")}`;
+}
+
+function formatDuration(totalSeconds: number) {
+  const safeSeconds = Math.max(0, Math.floor(totalSeconds));
+  const hours = Math.floor(safeSeconds / 3600);
+  const minutes = Math.floor((safeSeconds % 3600) / 60);
+
+  if (hours > 0) {
+    return `${hours} 小时 ${minutes} 分`;
+  }
+
+  return `${minutes} 分钟`;
+}
+
+function shuffleArray<T>(input: T[]) {
+  const next = [...input];
+  for (let index = next.length - 1; index > 0; index -= 1) {
+    const swapIndex = Math.floor(Math.random() * (index + 1));
+    [next[index], next[swapIndex]] = [next[swapIndex], next[index]];
+  }
+  return next;
 }
 
 function matchKeyword(keyword: string, ...values: Array<string | undefined>) {
@@ -96,6 +128,9 @@ export default function App() {
   useMediaSession();
   useTrayControls();
 
+  const mainRef = useRef<HTMLElement>(null);
+  useSmoothScroll(mainRef);
+
   const session = useAuthStore((state) => state.session);
   const isAuthenticated = useAuthStore((state) => state.isAuthenticated);
   const isLoggingIn = useAuthStore((state) => state.isLoggingIn);
@@ -121,9 +156,8 @@ export default function App() {
   const [viewportWidth, setViewportWidth] = useState(() =>
     typeof window === "undefined" ? 1280 : window.innerWidth,
   );
-  const [albumScrollTop, setAlbumScrollTop] = useState(0);
-  const [songScrollTop, setSongScrollTop] = useState(0);
   const [isNowPlayingSheetOpen, setNowPlayingSheetOpen] = useState(false);
+  const [isSettingsPanelOpen, setSettingsPanelOpen] = useState(false);
   const [isRefreshingLibrary, setRefreshingLibrary] = useState(false);
   const [searchInput, setSearchInput] = useState("");
   const [debouncedSearchInput, setDebouncedSearchInput] = useState("");
@@ -222,6 +256,62 @@ export default function App() {
     [searchKeyword, visibleSongs],
   );
 
+  const artistSummaries = useMemo(() => {
+    const map = new Map<
+      string,
+      {
+        artist: string;
+        albumCount: number;
+        songCount: number;
+        latestYear: number | null;
+      }
+    >();
+
+    for (const album of albumCards) {
+      const current = map.get(album.artist);
+      const nextYear = album.year ?? null;
+
+      if (!current) {
+        map.set(album.artist, {
+          artist: album.artist,
+          albumCount: 1,
+          songCount: album.songCount ?? 0,
+          latestYear: nextYear,
+        });
+        continue;
+      }
+
+      const latestYear = nextYear === null
+        ? current.latestYear
+        : current.latestYear === null
+          ? nextYear
+          : Math.max(current.latestYear, nextYear);
+
+      map.set(album.artist, {
+        artist: current.artist,
+        albumCount: current.albumCount + 1,
+        songCount: current.songCount + (album.songCount ?? 0),
+        latestYear,
+      });
+    }
+
+    return Array.from(map.values())
+      .filter((artist) => matchKeyword(debouncedSearchInput, artist.artist))
+      .sort((a, b) => {
+        const albumGap = b.albumCount - a.albumCount;
+        if (albumGap !== 0) {
+          return albumGap;
+        }
+
+        const songGap = b.songCount - a.songCount;
+        if (songGap !== 0) {
+          return songGap;
+        }
+
+        return a.artist.localeCompare(b.artist);
+      });
+  }, [albumCards, searchKeyword]);
+
   const discoverRecentAlbums = useMemo(
     () =>
       [...filteredAlbums]
@@ -245,14 +335,6 @@ export default function App() {
   );
 
   useEffect(() => {
-    setAlbumScrollTop(0);
-  }, [searchKeyword, filteredAlbums.length, viewportWidth]);
-
-  useEffect(() => {
-    setSongScrollTop(0);
-  }, [searchKeyword, selectedAlbumId, filteredSongs.length]);
-
-  useEffect(() => {
     if (isAuthenticated) {
       return;
     }
@@ -263,6 +345,7 @@ export default function App() {
     setSearchKeyword("");
     setActiveNavSection("discover");
     setNowPlayingSheetOpen(false);
+    setSettingsPanelOpen(false);
     setNavHistory({
       stack: ["discover"],
       index: 0,
@@ -273,6 +356,7 @@ export default function App() {
     isAuthenticated,
     setActiveNavSection,
     setNavHistory,
+    setSettingsPanelOpen,
     setPlaying,
     setQueue,
     setDebouncedSearchInput,
@@ -327,7 +411,7 @@ export default function App() {
   const suggestionAlbums = suggestionSearchData.albums;
   const suggestionSongs = suggestionSearchData.songs;
   const searchSuggestions = useMemo(() => {
-    const keyword = normalizedSearchInput.toLowerCase();
+    const keyword = normalizedDebouncedSearchInput.toLowerCase();
     if (!keyword) {
       return [];
     }
@@ -371,8 +455,6 @@ export default function App() {
     return Array.from(candidates).slice(0, 8);
   }, [albumCards, normalizedSearchInput, suggestionAlbums, suggestionSongs, visibleSongs]);
 
-  const dynamicGlow = useDominantColor(selectedCoverUrl);
-
   const getAlbumCoverUrl = (coverArt: string | undefined, size: number) =>
     coverArt && client ? client.getCoverArtUrl(coverArt, size) : null;
 
@@ -381,7 +463,17 @@ export default function App() {
       .filter(Boolean)
       .join(" · ");
 
-  const handlePlaySong = (songId: string) => {
+  const selectedAlbumSongCount = selectedAlbum?.songCount ?? visibleSongs.length;
+  const selectedAlbumDurationSeconds = selectedAlbum?.duration ??
+    visibleSongs.reduce((total, song) => total + (song.duration ?? 0), 0);
+  const selectedAlbumGenre = selectedAlbum?.genre ??
+    visibleSongs.find((song) => song.genre?.trim())?.genre;
+  const selectedAlbumQueue = useMemo(
+    () => (client ? visibleSongs.map((song) => mapSongToTrackInfo(song, client)) : []),
+    [client, visibleSongs],
+  );
+
+  const handlePlaySong = useCallback((songId: string) => {
     if (!client) {
       return;
     }
@@ -395,9 +487,28 @@ export default function App() {
 
     setQueue(queue, startIndex);
     setPlaying(true);
-  };
+  }, [client, visibleSongs, setQueue, setPlaying]);
 
-  const handlePlayGlobalSearchSong = (songId: string) => {
+  const handlePlayAlbumAll = useCallback(() => {
+    if (selectedAlbumQueue.length === 0) {
+      return;
+    }
+
+    setQueue(selectedAlbumQueue, 0);
+    setPlaying(true);
+  }, [selectedAlbumQueue, setQueue, setPlaying]);
+
+  const handleShuffleAlbum = useCallback(() => {
+    if (selectedAlbumQueue.length === 0) {
+      return;
+    }
+
+    const shuffledQueue = shuffleArray(selectedAlbumQueue);
+    setQueue(shuffledQueue, 0);
+    setPlaying(true);
+  }, [selectedAlbumQueue, setQueue, setPlaying]);
+
+  const handlePlayGlobalSearchSong = useCallback((songId: string) => {
     if (!client || globalSearchSongs.length === 0) {
       return;
     }
@@ -411,39 +522,35 @@ export default function App() {
 
     setQueue(queue, startIndex);
     setPlaying(true);
-  };
+  }, [client, globalSearchSongs, setQueue, setPlaying]);
 
   const albumColumns = useMemo(() => getAlbumColumns(viewportWidth), [viewportWidth]);
-  const albumRowCount = Math.ceil(filteredAlbums.length / albumColumns);
-  const albumStartRow = Math.max(
-    0,
-    Math.floor(albumScrollTop / ALBUM_ROW_HEIGHT) - ALBUM_OVERSCAN_ROWS,
-  );
-  const albumVisibleRows =
-    Math.ceil(ALBUM_SCROLL_HEIGHT / ALBUM_ROW_HEIGHT) + ALBUM_OVERSCAN_ROWS * 2;
-  const albumEndRow = Math.min(albumRowCount, albumStartRow + albumVisibleRows);
-  const albumStartIndex = albumStartRow * albumColumns;
-  const albumEndIndex = Math.min(filteredAlbums.length, albumEndRow * albumColumns);
-  const virtualAlbums = filteredAlbums.slice(albumStartIndex, albumEndIndex);
-  const albumTopPadding = albumStartRow * ALBUM_ROW_HEIGHT;
-  const renderedAlbumRows = Math.ceil(virtualAlbums.length / albumColumns);
-  const albumBottomPadding = Math.max(
-    0,
-    albumRowCount * ALBUM_ROW_HEIGHT - albumTopPadding - renderedAlbumRows * ALBUM_ROW_HEIGHT,
+  const albumGridAlbums = useMemo(
+    () =>
+      activeNavSection === "recent-added"
+        ? [...filteredAlbums].sort((a, b) => b.createdAt - a.createdAt)
+        : filteredAlbums,
+    [activeNavSection, filteredAlbums],
   );
 
-  const songStartIndex = Math.max(
-    0,
-    Math.floor(songScrollTop / SONG_ROW_HEIGHT) - SONG_OVERSCAN_ROWS,
-  );
-  const songVisibleCount =
-    Math.ceil(SONG_SCROLL_HEIGHT / SONG_ROW_HEIGHT) + SONG_OVERSCAN_ROWS * 2;
-  const songEndIndex = Math.min(filteredSongs.length, songStartIndex + songVisibleCount);
-  const virtualSongs = filteredSongs.slice(songStartIndex, songEndIndex);
-  const songTopPadding = songStartIndex * SONG_ROW_HEIGHT;
-  const songBottomPadding = Math.max(
-    0,
-    filteredSongs.length * SONG_ROW_HEIGHT - songTopPadding - virtualSongs.length * SONG_ROW_HEIGHT,
+  const [displayLimit, setDisplayLimit] = useState(120);
+
+  useEffect(() => {
+    if (activeNavSection !== "albums" && activeNavSection !== "recent-added") {
+      setDisplayLimit(120);
+      return;
+    }
+
+    const timer = setTimeout(() => {
+      setDisplayLimit(albumGridAlbums.length);
+    }, 1500);
+
+    return () => clearTimeout(timer);
+  }, [activeNavSection, albumGridAlbums.length]);
+
+  const displayedAlbums = useMemo(
+    () => albumGridAlbums.slice(0, displayLimit),
+    [albumGridAlbums, displayLimit]
   );
 
   const lyricsTarget = currentTrack
@@ -468,8 +575,10 @@ export default function App() {
 
   const viewTitleMap = {
     discover: "发现",
-    "recent-added": "最近添加",
-    albums: "专辑与歌曲",
+    "recent-added": "最近播放",
+    albums: "专辑",
+    artists: "艺人",
+    songs: "歌曲",
     "album-detail": "专辑详情",
     search: "全局搜索",
     playlists: "播放列表",
@@ -477,17 +586,24 @@ export default function App() {
 
   const viewDescriptionMap = {
     discover: "浏览你的音乐库与专辑，点击底部播放栏左侧封面可展开正在播放。",
-    "recent-added": "按最近添加维度查看并播放你的音乐库内容。",
-    albums: "专辑与歌曲列表均通过 TanStack Query 缓存；歌曲点选后直接进入播放队列。",
-    "album-detail": "查看专辑内曲目并加入播放队列。",
+    "recent-added": "按最近播放与新增顺序浏览专辑，快速续播。",
+    albums: "专辑列表已接入虚拟滚动，适合快速浏览与进入详情。",
+    artists: "按专辑统计艺人，展示曲目规模与最近发行年份。",
+    songs: "展示当前专辑曲目，可直接点选播放。",
+    "album-detail": "展示专辑元数据并支持播放全部、打乱播放。",
     search: "跨全库搜索专辑与歌曲，结果来自 Subsonic search3。",
-    playlists: "播放列表入口已接入，后续可扩展为真实列表管理。",
+    playlists: "收藏歌单与新建歌单入口已预留，后续可扩展为真实列表管理。",
   } as const;
 
   const isPlaylistsView = activeNavSection === "playlists";
   const isSearchView = activeNavSection === "search";
   const isAlbumDetailView = activeNavSection === "album-detail";
   const isDiscoverView = activeNavSection === "discover";
+  const isRecentAddedView = activeNavSection === "recent-added";
+  const isAlbumsView = activeNavSection === "albums";
+  const isArtistsView = activeNavSection === "artists";
+  const isSongsView = activeNavSection === "songs";
+  const isAlbumCollectionView = isDiscoverView || isRecentAddedView || isAlbumsView;
   const discoverFeaturedAlbum = discoverRecentAlbums[0] ?? null;
   const discoverFeaturedCoverUrl = discoverFeaturedAlbum
     ? getAlbumCoverUrl(discoverFeaturedAlbum.coverArt, 512)
@@ -510,6 +626,7 @@ export default function App() {
     }
 
     setActiveNavSection(section);
+    setSettingsPanelOpen(false);
     setNavHistory((prev) => {
       const currentSection = prev.stack[prev.index];
       if (currentSection === section) {
@@ -584,6 +701,14 @@ export default function App() {
     setNowPlayingSheetOpen(false);
   };
 
+  const handleOpenSettingsPanel = () => {
+    setSettingsPanelOpen(true);
+  };
+
+  const handleCloseSettingsPanel = () => {
+    setSettingsPanelOpen(false);
+  };
+
   const handleSelectQueueTrack = (trackId: string) => {
     playTrackById(trackId);
     setPlaying(true);
@@ -611,10 +736,10 @@ export default function App() {
     }
   };
 
-  const handleOpenAlbumDetail = (albumId: string) => {
+  const handleOpenAlbumDetail = useCallback((albumId: string) => {
     setSelectedAlbumId(albumId);
     handleNavigateSection("album-detail");
-  };
+  }, [setSelectedAlbumId, handleNavigateSection]);
 
   const handleBackToAlbums = () => {
     handleNavigateSection("albums");
@@ -662,14 +787,7 @@ export default function App() {
       <div className="relative h-screen w-full overflow-hidden bg-slate-100 text-slate-900 dark:bg-slate-950 dark:text-slate-100">
         <div className="relative flex h-full w-full items-center justify-center overflow-hidden px-6">
           <WindowTitlebar />
-          <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top_right,rgba(16,185,129,0.14),transparent_45%),radial-gradient(circle_at_bottom_left,rgba(59,130,246,0.12),transparent_42%)]" />
-
-          <motion.div
-            initial={{ opacity: 0, y: 12 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.35, ease: "easeOut" }}
-            className="relative z-10 w-full max-w-md pt-16"
-          >
+          <div className="relative z-10 w-full max-w-md pt-16">
             <div className="mb-4 text-center">
               <h1 className="text-2xl font-semibold tracking-tight">OtoMusic</h1>
               <p className="mt-2 text-sm text-slate-600 dark:text-slate-300">
@@ -691,7 +809,7 @@ export default function App() {
               }}
               onFieldChange={clearLoginError}
             />
-          </motion.div>
+          </div>
         </div>
       </div>
     );
@@ -716,27 +834,15 @@ export default function App() {
           refreshing={isRefreshingLibrary}
         />
 
-        <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top_right,rgba(16,185,129,0.14),transparent_45%),radial-gradient(circle_at_bottom_left,rgba(59,130,246,0.12),transparent_42%)]" />
-        <motion.div
-          aria-hidden
-          animate={{ opacity: selectedCoverUrl ? 0.6 : 0.25 }}
-          transition={{ duration: 0.45, ease: "easeOut" }}
-          className="pointer-events-none absolute inset-0"
-          style={{
-            background: `radial-gradient(circle at 72% 28%, ${dynamicGlow}, transparent 44%)`,
-          }}
-        />
-
         <div className="relative z-10 flex h-full min-h-0 pb-24 pt-14">
-          <Sidebar onNavigateSection={handleNavigateSection} />
+          <Sidebar
+            onNavigateSection={handleNavigateSection}
+            onOpenSettings={handleOpenSettingsPanel}
+          />
 
-          <main className="relative h-full min-h-0 flex-1 space-y-6 overflow-y-auto p-6 sm:p-8">
-        <motion.section
-          initial={{ opacity: 0, y: 12 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.35, ease: "easeOut" }}
-          className="flex items-center justify-between"
-        >
+          <main ref={mainRef} className="relative h-full min-h-0 flex-1 overflow-y-auto p-6 sm:p-8 scrollbar-thin">
+            <div className="flex flex-col gap-8 pb-12">
+        <section className="flex items-center justify-between">
           <div>
             <div className="mb-2 flex items-center gap-2 text-slate-500 dark:text-slate-300">
               <Disc3 className="h-4 w-4" />
@@ -747,7 +853,7 @@ export default function App() {
               {viewDescriptionMap[activeNavSection]}
             </p>
           </div>
-        </motion.section>
+        </section>
 
         {isLibraryView && (albumError || songsError) && (
           <Card className="border-rose-200 bg-rose-50 dark:border-rose-900/40 dark:bg-rose-900/20">
@@ -770,7 +876,7 @@ export default function App() {
               <CardTitle className="text-base">播放列表</CardTitle>
             </CardHeader>
             <CardContent className="text-sm text-slate-600 dark:text-slate-300">
-              播放列表功能即将完善，当前可先从“专辑”或“最近添加”中直接点歌播放。
+              播放列表功能即将完善，当前可先从“专辑”或“最近播放”中直接点歌播放。
             </CardContent>
           </Card>
         )}
@@ -862,24 +968,18 @@ export default function App() {
                         搜索中...
                       </div>
                     ) : globalSearchSongs.length > 0 ? (
-                      <div className="max-h-[520px] space-y-1 overflow-y-auto pr-1">
+                      <div className="space-y-1 pr-1">
                         {globalSearchSongs.map((song, index) => (
-                          <button
+                          <SongListItem
                             key={song.id}
-                            type="button"
-                            onClick={() => handlePlayGlobalSearchSong(song.id)}
-                            className="flex w-full items-center justify-between rounded-lg px-3 py-2 text-left transition-colors hover:bg-slate-100 dark:hover:bg-slate-800"
-                          >
-                            <div className="mr-3 min-w-0">
-                              <p className="truncate text-sm font-medium">
-                                {index + 1}. {song.title}
-                              </p>
-                              <p className="truncate text-xs text-slate-500 dark:text-slate-400">
-                                {song.artist ?? "Unknown Artist"} · {song.album ?? "Unknown Album"}
-                              </p>
-                            </div>
-                            <span className="text-xs text-slate-500">{formatTime(song.duration ?? 0)}</span>
-                          </button>
+                            id={song.id}
+                            index={index}
+                            title={song.title}
+                            artist={song.artist ?? "Unknown Artist"}
+                            duration={formatTime(song.duration ?? 0)}
+                            isPlaying={currentTrackId === song.id}
+                            onClick={handlePlayGlobalSearchSong}
+                          />
                         ))}
                       </div>
                     ) : (
@@ -896,7 +996,7 @@ export default function App() {
 
         {isLibraryView && (
           <>
-            {!isAlbumDetailView && (
+            {isAlbumCollectionView && !isAlbumDetailView && (
               <section className="space-y-5">
                 {isDiscoverView && (
                   <>
@@ -917,7 +1017,6 @@ export default function App() {
 
                               <div className="min-w-0">
                                 <p className="mb-2 inline-flex items-center gap-1 rounded-full bg-white/70 px-2 py-1 text-[0.68rem] font-medium uppercase tracking-[0.16em] text-emerald-700 dark:bg-slate-900/55 dark:text-emerald-300">
-                                  <Sparkles className="h-3.5 w-3.5" />
                                   推荐位
                                 </p>
                                 <h3 className="truncate text-xl font-semibold tracking-tight">
@@ -973,17 +1072,14 @@ export default function App() {
                           <CardContent className="p-3 pt-0">
                             {section.albums.length > 0 ? (
                               <div className="-mx-1 flex gap-3 overflow-x-auto px-1 pb-1">
-                                {section.albums.map((album, index) => {
+                                {section.albums.map((album) => {
                                   const coverUrl = getAlbumCoverUrl(album.coverArt, 384);
                                   const albumMeta = getAlbumSecondaryMeta(album);
 
                                   return (
-                                    <motion.button
+                                    <button
                                       key={`${section.key}-${album.id}`}
                                       type="button"
-                                      initial={{ opacity: 0, y: 8 }}
-                                      animate={{ opacity: 1, y: 0 }}
-                                      transition={{ duration: 0.22, delay: Math.min(index, 10) * 0.02 }}
                                       onClick={() => handleOpenAlbumDetail(album.id)}
                                       className="w-40 shrink-0 overflow-hidden rounded-xl border border-slate-200 bg-white text-left transition-colors hover:border-emerald-400/70 dark:border-slate-800 dark:bg-slate-900"
                                     >
@@ -1008,7 +1104,7 @@ export default function App() {
                                           </p>
                                         ) : null}
                                       </div>
-                                    </motion.button>
+                                    </button>
                                   );
                                 })}
                               </div>
@@ -1027,7 +1123,9 @@ export default function App() {
                 <div>
                   <div className="mb-3 flex items-center gap-2">
                     <Disc3 className="h-4 w-4 text-slate-500" />
-                    <h2 className="text-sm font-medium">{isDiscoverView ? "全部专辑" : "专辑列表"}</h2>
+                    <h2 className="text-sm font-medium">
+                      {isDiscoverView ? "全部专辑" : isRecentAddedView ? "最近播放专辑" : "专辑列表"}
+                    </h2>
                   </div>
 
                   <Card>
@@ -1041,66 +1139,31 @@ export default function App() {
                             />
                           ))}
                         </div>
-                      ) : filteredAlbums.length > 0 ? (
+                      ) : albumGridAlbums.length > 0 ? (
                         <div
-                          className="max-h-[560px] overflow-y-auto pr-1"
-                          onScroll={(event) => {
-                            setAlbumScrollTop(event.currentTarget.scrollTop);
-                          }}
+                          className="pr-1"
                         >
-                          <div style={{ height: albumTopPadding }} />
-
                           <div
                             className="grid gap-4"
                             style={{
                               gridTemplateColumns: `repeat(${albumColumns}, minmax(0, 1fr))`,
                             }}
                           >
-                            {virtualAlbums.map((album, index) => {
+                            {displayedAlbums.map((album) => {
                               const coverUrl = getAlbumCoverUrl(album.coverArt, 384);
 
                               return (
-                                <motion.div
+                                <AlbumGridItem
                                   key={album.id}
-                                  initial={{ opacity: 0, y: 10 }}
-                                  animate={{ opacity: 1, y: 0 }}
-                                  transition={{ duration: 0.24, delay: Math.min(index, 10) * 0.02 }}
-                                >
-                                  <button
-                                    type="button"
-                                    onClick={() => handleOpenAlbumDetail(album.id)}
-                                    className="w-full text-left"
-                                  >
-                                    <Card className="overflow-hidden transition-colors hover:border-emerald-400/70">
-                                      <div className="aspect-square overflow-hidden border-b border-slate-200 dark:border-slate-800">
-                                        {coverUrl ? (
-                                          <img
-                                            src={coverUrl}
-                                            alt={`${album.title} cover`}
-                                            className="h-full w-full object-cover"
-                                            loading="lazy"
-                                          />
-                                        ) : (
-                                          <div className="h-full w-full bg-[radial-gradient(circle_at_20%_20%,rgba(16,185,129,0.24),transparent_40%),radial-gradient(circle_at_80%_80%,rgba(59,130,246,0.2),transparent_42%)]" />
-                                        )}
-                                      </div>
-
-                                      <CardHeader>
-                                        <CardTitle className="truncate text-base">{album.title}</CardTitle>
-                                      </CardHeader>
-                                      <CardContent>
-                                        <p className="truncate text-sm text-slate-600 dark:text-slate-300">
-                                          {album.artist}
-                                        </p>
-                                      </CardContent>
-                                    </Card>
-                                  </button>
-                                </motion.div>
+                                  id={album.id}
+                                  title={album.title}
+                                  artist={album.artist}
+                                  coverUrl={coverUrl}
+                                  onClick={handleOpenAlbumDetail}
+                                />
                               );
                             })}
                           </div>
-
-                          <div style={{ height: albumBottomPadding }} />
                         </div>
                       ) : (
                         <div className="flex h-24 items-center justify-center rounded-lg text-sm text-slate-500">
@@ -1110,6 +1173,124 @@ export default function App() {
                     </CardContent>
                   </Card>
                 </div>
+              </section>
+            )}
+
+            {isArtistsView && (
+              <section>
+                <div className="mb-3 flex items-center gap-2">
+                  <Mic2 className="h-4 w-4 text-slate-500" />
+                  <h2 className="text-sm font-medium">艺人列表</h2>
+                </div>
+
+                <Card>
+                  <CardContent className="p-3">
+                    {artistSummaries.length > 0 ? (
+                      <div className="space-y-2">
+                        {artistSummaries.map((artist) => (
+                          <div
+                            key={artist.artist}
+                            className="flex items-center justify-between rounded-xl border border-slate-200/80 bg-white px-3 py-2.5 dark:border-slate-800/80 dark:bg-slate-900"
+                          >
+                            <div className="min-w-0">
+                              <p className="truncate text-sm font-medium">{artist.artist}</p>
+                              <p className="truncate text-xs text-slate-500 dark:text-slate-400">
+                                {artist.albumCount} 张专辑 · {artist.songCount} 首歌曲
+                                {artist.latestYear ? ` · 最近 ${artist.latestYear}` : ""}
+                              </p>
+                            </div>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => {
+                                setSearchInput(artist.artist);
+                                setSearchKeyword(artist.artist);
+                                handleNavigateSection("search");
+                              }}
+                            >
+                              搜索作品
+                            </Button>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="flex h-24 items-center justify-center rounded-lg text-sm text-slate-500">
+                        没有匹配到艺人
+                      </div>
+                    )}
+                  </CardContent>
+                </Card>
+              </section>
+            )}
+
+            {isSongsView && (
+              <section className="space-y-4">
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                  <div className="flex items-center gap-2">
+                    <Music2 className="h-4 w-4 text-slate-500" />
+                    <h2 className="text-sm font-medium">歌曲列表</h2>
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-2">
+                    <select
+                      value={selectedAlbumId ?? ""}
+                      onChange={(event) => setSelectedAlbumId(event.target.value || null)}
+                      className="h-9 min-w-[220px] rounded-lg border border-slate-200 bg-white px-3 text-sm outline-none transition-colors focus:border-emerald-400 dark:border-slate-700 dark:bg-slate-900"
+                    >
+                      {albumCards.map((album) => (
+                        <option key={`song-view-${album.id}`} value={album.id}>
+                          {album.title} · {album.artist}
+                        </option>
+                      ))}
+                    </select>
+                    <Button size="sm" onClick={handlePlayAlbumAll} disabled={visibleSongs.length === 0}>
+                      播放全部
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={handleShuffleAlbum}
+                      disabled={visibleSongs.length === 0}
+                    >
+                      <Shuffle className="mr-1.5 h-3.5 w-3.5" />
+                      打乱播放
+                    </Button>
+                  </div>
+                </div>
+
+                <Card>
+                  <CardContent className="p-2">
+                    <div className="p-1">
+                      {songsLoading ? (
+                        Array.from({ length: 8 }).map((_, index) => (
+                          <div
+                            key={`songs-view-skeleton-${index}`}
+                            className="mb-1 h-12 animate-pulse rounded-lg bg-slate-100 dark:bg-slate-800"
+                          />
+                        ))
+                      ) : filteredSongs.length > 0 ? (
+                        <>
+                          {filteredSongs.map((song, index) => (
+                            <SongListItem
+                              key={`songs-view-${song.id}`}
+                              id={song.id}
+                              index={index}
+                              title={song.title}
+                              artist={song.artist ?? "Unknown Artist"}
+                              duration={formatTime(song.duration ?? 0)}
+                              isPlaying={currentTrackId === song.id}
+                              onClick={handlePlaySong}
+                            />
+                          ))}
+                        </>
+                      ) : (
+                        <div className="flex h-24 items-center justify-center rounded-lg text-sm text-slate-500">
+                          当前专辑没有可显示歌曲
+                        </div>
+                      )}
+                    </div>
+                  </CardContent>
+                </Card>
               </section>
             )}
 
@@ -1128,24 +1309,70 @@ export default function App() {
                     )}
                   </div>
 
-                  <Card>
-                    <CardContent className="flex items-center gap-4 p-4">
-                      {selectedCoverUrl ? (
-                        <img
-                          src={selectedCoverUrl}
-                          alt={`${selectedAlbum?.title ?? "album"} cover`}
-                          className="h-20 w-20 rounded-lg object-cover"
-                        />
-                      ) : (
-                        <div className="h-20 w-20 rounded-lg bg-[radial-gradient(circle_at_20%_20%,rgba(16,185,129,0.24),transparent_40%),radial-gradient(circle_at_80%_80%,rgba(59,130,246,0.2),transparent_42%)]" />
-                      )}
-                      <div className="min-w-0">
-                        <p className="truncate text-xl font-semibold">
-                          {selectedAlbum?.title ?? "未选择专辑"}
-                        </p>
-                        <p className="truncate text-sm text-slate-600 dark:text-slate-300">
-                          {selectedAlbum?.artist ?? "Unknown Artist"}
-                        </p>
+                  <Card className="relative overflow-hidden border-slate-200/90 dark:border-slate-800/90">
+                    {selectedCoverUrl ? (
+                      <div
+                        aria-hidden
+                        className="pointer-events-none absolute inset-0 bg-cover bg-center opacity-25 blur-2xl saturate-150"
+                        style={{ backgroundImage: `url(${selectedCoverUrl})` }}
+                      />
+                    ) : null}
+                    <CardContent className="relative p-5 sm:p-6">
+                      <div className="flex flex-col gap-5 sm:flex-row sm:items-end">
+                        {selectedCoverUrl ? (
+                          <img
+                            src={selectedCoverUrl}
+                            alt={`${selectedAlbum?.title ?? "album"} cover`}
+                            className="h-36 w-36 rounded-2xl border border-slate-200/80 object-cover shadow-lg dark:border-slate-800/80"
+                          />
+                        ) : (
+                          <div className="h-36 w-36 rounded-2xl bg-[radial-gradient(circle_at_20%_20%,rgba(16,185,129,0.24),transparent_40%),radial-gradient(circle_at_80%_80%,rgba(59,130,246,0.2),transparent_42%)]" />
+                        )}
+
+                        <div className="min-w-0 flex-1">
+                          <p className="mb-2 text-[0.68rem] font-semibold uppercase tracking-[0.18em] text-slate-500 dark:text-slate-300">
+                            Album
+                          </p>
+                          <p className="truncate text-2xl font-semibold tracking-tight">
+                            {selectedAlbum?.title ?? "未选择专辑"}
+                          </p>
+                          <p className="mt-1 truncate text-sm text-slate-600 dark:text-slate-300">
+                            {selectedAlbum?.artist ?? "Unknown Artist"}
+                          </p>
+
+                          <div className="mt-4 grid gap-2 text-xs text-slate-600 dark:text-slate-300 sm:grid-cols-2">
+                            <p className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200/80 bg-white/70 px-2.5 py-1.5 dark:border-slate-800/80 dark:bg-slate-900/70">
+                              <CalendarDays className="h-3.5 w-3.5 text-slate-500" />
+                              {selectedAlbum?.year ?? "未知年份"}
+                            </p>
+                            <p className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200/80 bg-white/70 px-2.5 py-1.5 dark:border-slate-800/80 dark:bg-slate-900/70">
+                              <Tags className="h-3.5 w-3.5 text-slate-500" />
+                              {selectedAlbumGenre ?? "未知流派"}
+                            </p>
+                            <p className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200/80 bg-white/70 px-2.5 py-1.5 dark:border-slate-800/80 dark:bg-slate-900/70">
+                              <ListMusic className="h-3.5 w-3.5 text-slate-500" />
+                              {selectedAlbumSongCount} 首
+                            </p>
+                            <p className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200/80 bg-white/70 px-2.5 py-1.5 dark:border-slate-800/80 dark:bg-slate-900/70">
+                              <Clock3 className="h-3.5 w-3.5 text-slate-500" />
+                              {formatDuration(selectedAlbumDurationSeconds)}
+                            </p>
+                          </div>
+                        </div>
+
+                        <div className="flex shrink-0 items-center gap-2">
+                          <Button onClick={handlePlayAlbumAll} disabled={visibleSongs.length === 0}>
+                            播放全部
+                          </Button>
+                          <Button
+                            variant="outline"
+                            onClick={handleShuffleAlbum}
+                            disabled={visibleSongs.length === 0}
+                          >
+                            <Shuffle className="mr-2 h-4 w-4" />
+                            打乱播放
+                          </Button>
+                        </div>
                       </div>
                     </CardContent>
                   </Card>
@@ -1161,12 +1388,7 @@ export default function App() {
 
                   <Card>
                     <CardContent className="p-2">
-                      <div
-                        className="max-h-[480px] overflow-y-auto p-1"
-                        onScroll={(event) => {
-                          setSongScrollTop(event.currentTarget.scrollTop);
-                        }}
-                      >
+                      <div className="p-1">
                         {songsLoading ? (
                           Array.from({ length: 8 }).map((_, index) => (
                             <div
@@ -1176,39 +1398,18 @@ export default function App() {
                           ))
                         ) : filteredSongs.length > 0 ? (
                           <>
-                            <div style={{ height: songTopPadding }} />
-
-                            {virtualSongs.map((song, index) => {
-                              const actualIndex = songStartIndex + index;
-                              const playing = currentTrackId === song.id;
-
-                              return (
-                                <button
-                                  key={song.id}
-                                  type="button"
-                                  onClick={() => handlePlaySong(song.id)}
-                                  className={cn(
-                                    "mb-1 flex h-12 w-full items-center justify-between rounded-lg px-3 text-left transition-colors",
-                                    "hover:bg-slate-100 dark:hover:bg-slate-800",
-                                    playing && "bg-emerald-100 text-emerald-800 dark:bg-emerald-950/35 dark:text-emerald-300",
-                                  )}
-                                >
-                                  <div className="mr-3 flex min-w-0 items-center gap-3">
-                                    <span className="w-5 text-xs text-slate-500">{actualIndex + 1}</span>
-                                    <div className="min-w-0">
-                                      <p className="truncate text-sm font-medium">{song.title}</p>
-                                      <p className="truncate text-xs text-slate-500 dark:text-slate-400">
-                                        {song.artist ?? "Unknown Artist"}
-                                      </p>
-                                    </div>
-                                  </div>
-
-                                  <span className="text-xs text-slate-500">{formatTime(song.duration ?? 0)}</span>
-                                </button>
-                              );
-                            })}
-
-                            <div style={{ height: songBottomPadding }} />
+                            {filteredSongs.map((song, index) => (
+                              <SongListItem
+                                key={song.id}
+                                id={song.id}
+                                index={index}
+                                title={song.title}
+                                artist={song.artist ?? "Unknown Artist"}
+                                duration={formatTime(song.duration ?? 0)}
+                                isPlaying={currentTrackId === song.id}
+                                onClick={handlePlaySong}
+                              />
+                            ))}
                           </>
                         ) : (
                           <div className="flex h-24 items-center justify-center rounded-lg text-sm text-slate-500">
@@ -1230,6 +1431,7 @@ export default function App() {
               正在同步 Navidrome 数据...
             </div>
           )}
+          </div>
           </main>
         </div>
 
@@ -1244,6 +1446,8 @@ export default function App() {
           onClose={handleCloseNowPlayingSheet}
           onSelectTrack={handleSelectQueueTrack}
         />
+
+        <SettingsPanel open={isSettingsPanelOpen} onClose={handleCloseSettingsPanel} />
 
         <PlayerBar
           nowPlayingOpen={isNowPlayingSheetOpen}

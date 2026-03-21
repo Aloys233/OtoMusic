@@ -11,7 +11,7 @@ import {
   SkipForward,
   Volume2,
 } from "lucide-react";
-import { type MouseEvent, useEffect, useRef } from "react";
+import { type MouseEvent, useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import { audioEngine } from "@/lib/audio/AudioEngine";
 import { cn } from "@/lib/utils";
@@ -27,6 +27,11 @@ type PlayerBarProps = {
   onToggleNowPlaying?: () => void;
 };
 
+type HoverSeekState = {
+  ratio: number;
+  seconds: number;
+};
+
 const repeatModeMap = {
   off: "all",
   all: "one",
@@ -40,6 +45,19 @@ function formatTime(totalSeconds: number) {
   return `${minutes}:${seconds.toString().padStart(2, "0")}`;
 }
 
+function resolveSeekProgress(clientX: number, bounds: DOMRect, duration: number): HoverSeekState | null {
+  if (bounds.width <= 0) {
+    return null;
+  }
+
+  const pointerRatio = (clientX - bounds.left) / bounds.width;
+  const ratio = Math.min(1, Math.max(0, pointerRatio));
+  return {
+    ratio,
+    seconds: ratio * duration,
+  };
+}
+
 export function PlayerBar({
   className,
   nowPlayingOpen = false,
@@ -49,7 +67,6 @@ export function PlayerBar({
   const currentTrack = usePlayerStore((state) => state.currentTrack);
   const queue = usePlayerStore((state) => state.queue);
   const isPlaying = usePlayerStore((state) => state.isPlaying);
-  const progress = usePlayerStore((state) => state.progress);
   const volume = usePlayerStore((state) => state.volume);
   const repeatMode = usePlayerStore((state) => state.repeatMode);
   const shuffle = usePlayerStore((state) => state.shuffle);
@@ -62,10 +79,15 @@ export function PlayerBar({
   const playNext = usePlayerStore((state) => state.playNext);
   const playPrevious = usePlayerStore((state) => state.playPrevious);
 
+  const [hoverSeek, setHoverSeek] = useState<HoverSeekState | null>(null);
+
+  // Refs for direct DOM progress updates — avoids React re-renders during playback
+  const fillRef = useRef<HTMLSpanElement>(null);
+  const thumbRef = useRef<HTMLSpanElement>(null);
+  const timeRef = useRef<HTMLSpanElement>(null);
+
   const fallbackDuration = 225;
   const duration = Math.max(1, currentTrack?.duration ?? fallbackDuration);
-  const safeProgress = Math.min(progress, duration);
-  const publishedProgressRef = useRef(-1);
 
   useEffect(() => {
     audioEngine.setVolume(volume);
@@ -104,33 +126,47 @@ export function PlayerBar({
     setPlaying,
   ]);
 
+  // Sync progress DOM when duration changes (track switch)
+  useLayoutEffect(() => {
+    const t = Math.min(audioEngine.getCurrentTime(), duration);
+    const pct = (t / duration) * 100;
+    if (fillRef.current) fillRef.current.style.width = `${pct}%`;
+    if (thumbRef.current) thumbRef.current.style.left = `calc(${pct}% - 6px)`;
+    if (timeRef.current) timeRef.current.textContent = formatTime(t);
+  }, [duration]);
+
+  // RAF loop — direct DOM manipulation, no React state updates
   useEffect(() => {
     if (!isPlaying) {
       return;
     }
 
     let frameId = 0;
-    const PROGRESS_STEP_SECONDS = 0.04;
+    let lastStoreSync = 0;
 
-    const updateProgress = () => {
-      const currentTime = audioEngine.getCurrentTime();
-      const quantizedProgress =
-        Math.round(currentTime / PROGRESS_STEP_SECONDS) * PROGRESS_STEP_SECONDS;
+    const tick = () => {
+      const t = audioEngine.getCurrentTime();
+      const safeT = Math.min(t, duration);
+      const pct = (safeT / duration) * 100;
 
-      if (quantizedProgress !== publishedProgressRef.current) {
-        publishedProgressRef.current = quantizedProgress;
-        setProgress(quantizedProgress);
+      if (fillRef.current) fillRef.current.style.width = `${pct}%`;
+      if (thumbRef.current) thumbRef.current.style.left = `calc(${pct}% - 6px)`;
+      if (timeRef.current) timeRef.current.textContent = formatTime(safeT);
+
+      // Sync to store every ~1s (infrequent, won't cause jank)
+      if (t - lastStoreSync >= 1) {
+        lastStoreSync = t;
+        setProgress(t);
       }
 
-      frameId = requestAnimationFrame(updateProgress);
+      frameId = requestAnimationFrame(tick);
     };
 
-    publishedProgressRef.current = -1;
-    frameId = requestAnimationFrame(updateProgress);
+    frameId = requestAnimationFrame(tick);
     return () => {
       cancelAnimationFrame(frameId);
     };
-  }, [isPlaying, setProgress]);
+  }, [isPlaying, duration, setProgress]);
 
   useEffect(() => {
     let unbind: (() => void) | undefined;
@@ -221,15 +257,32 @@ export function PlayerBar({
       return;
     }
 
-    const bounds = event.currentTarget.getBoundingClientRect();
-    if (bounds.width <= 0) {
+    const next = resolveSeekProgress(
+      event.clientX,
+      event.currentTarget.getBoundingClientRect(),
+      duration,
+    );
+    if (!next) {
       return;
     }
 
-    const pointerRatio = (event.clientX - bounds.left) / bounds.width;
-    const nextProgress = Math.min(duration, Math.max(0, pointerRatio * duration));
-    setProgress(nextProgress);
-    void audioEngine.seek(nextProgress);
+    setProgress(next.seconds);
+    void audioEngine.seek(next.seconds);
+
+    // Immediately update DOM (no wait for next RAF tick)
+    const pct = (next.seconds / duration) * 100;
+    if (fillRef.current) fillRef.current.style.width = `${pct}%`;
+    if (thumbRef.current) thumbRef.current.style.left = `calc(${pct}% - 6px)`;
+    if (timeRef.current) timeRef.current.textContent = formatTime(next.seconds);
+  };
+
+  const handleProgressHover = (event: MouseEvent<HTMLButtonElement>) => {
+    const next = resolveSeekProgress(
+      event.clientX,
+      event.currentTarget.getBoundingClientRect(),
+      duration,
+    );
+    setHoverSeek(next);
   };
 
   const handleRepeatToggle = () => {
@@ -252,7 +305,6 @@ export function PlayerBar({
 
   const trackTitle = currentTrack?.title ?? "FLAC Placeholder Track";
   const trackArtist = currentTrack?.artist ?? "Unknown Artist";
-  const progressPercent = (safeProgress / duration) * 100;
 
   return (
     <motion.footer
@@ -264,20 +316,7 @@ export function PlayerBar({
         className,
       )}
     >
-      <button
-        type="button"
-        aria-label="seek-progress"
-        disabled={!currentTrack?.streamUrl}
-        onClick={handleProgressBarSeek}
-        className="absolute inset-x-0 top-0 z-20 h-[2px] cursor-pointer bg-red-500/16 transition-colors hover:bg-red-500/24 disabled:cursor-not-allowed disabled:bg-red-500/10"
-      >
-        <span
-          className="block h-full bg-red-500 transition-[width] duration-150 ease-out"
-          style={{ width: `${progressPercent}%` }}
-        />
-      </button>
-
-      <div className="grid grid-cols-[minmax(0,1fr)] items-center gap-3 pt-1 md:grid-cols-[minmax(0,260px)_auto_minmax(0,240px)]">
+      <div className="grid grid-cols-[minmax(0,1fr)] items-center gap-3 md:grid-cols-[minmax(0,1fr)_minmax(0,540px)_minmax(0,1fr)]">
         <div className="flex min-w-0 items-center gap-2.5 sm:gap-3">
           <button
             type="button"
@@ -305,7 +344,7 @@ export function PlayerBar({
           </div>
         </div>
 
-        <div className="flex min-w-0 flex-col items-center gap-1.5">
+        <div className="flex min-w-0 flex-col items-center gap-2">
           <div className="flex items-center gap-1 sm:gap-1.5">
             <Button
               size="icon"
@@ -329,7 +368,9 @@ export function PlayerBar({
             <Button
               size="icon"
               aria-label="play-pause"
-              onClick={() => void handleTogglePlay()}
+              onClick={() => {
+                void handleTogglePlay();
+              }}
               disabled={!currentTrack?.streamUrl}
               className="h-11 w-11 rounded-full"
             >
@@ -355,9 +396,44 @@ export function PlayerBar({
             </Button>
           </div>
 
-          <p className="text-[11px] text-slate-500 dark:text-slate-400">
-            {formatTime(safeProgress)} / {formatTime(duration)}
-          </p>
+          <div className="flex w-full max-w-[460px] items-center gap-2.5 px-1">
+            <span ref={timeRef} className="w-9 text-right text-[11px] tabular-nums text-slate-500 dark:text-slate-400">
+              0:00
+            </span>
+
+            <button
+              type="button"
+              aria-label="seek-progress"
+              disabled={!currentTrack?.streamUrl}
+              onClick={handleProgressBarSeek}
+              onMouseMove={handleProgressHover}
+              onMouseLeave={() => setHoverSeek(null)}
+              className="relative h-4 flex-1 cursor-pointer disabled:cursor-not-allowed"
+            >
+              <span className="absolute inset-x-0 top-1/2 h-1 -translate-y-1/2 rounded-full bg-slate-300/80 dark:bg-slate-700/85" />
+              <span
+                ref={fillRef}
+                className="absolute left-0 top-1/2 h-1 -translate-y-1/2 rounded-full bg-red-500"
+              />
+              <span
+                ref={thumbRef}
+                className="absolute top-1/2 h-3 w-3 -translate-y-1/2 rounded-full border border-white bg-red-500 shadow-sm dark:border-slate-900"
+              />
+
+              {hoverSeek ? (
+                <span
+                  className="pointer-events-none absolute bottom-4 -translate-x-1/2 rounded-md bg-slate-900/90 px-1.5 py-0.5 text-[10px] font-medium tabular-nums text-white shadow"
+                  style={{ left: `${hoverSeek.ratio * 100}%` }}
+                >
+                  {formatTime(hoverSeek.seconds)}
+                </span>
+              ) : null}
+            </button>
+
+            <span className="w-9 text-[11px] tabular-nums text-slate-500 dark:text-slate-400">
+              {formatTime(duration)}
+            </span>
+          </div>
         </div>
 
         <div className="flex items-center justify-end gap-2.5 sm:gap-3">

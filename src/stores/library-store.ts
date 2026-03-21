@@ -4,6 +4,8 @@ export type LibraryNavSection =
   | "discover"
   | "recent-added"
   | "albums"
+  | "artists"
+  | "songs"
   | "album-detail"
   | "search"
   | "playlists";

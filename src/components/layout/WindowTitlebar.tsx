@@ -1,17 +1,12 @@
 import { ArrowLeft, ArrowRight, Minus, RefreshCw, Search, Square, X } from "lucide-react";
-import { useMemo, useState } from "react";
+import { type CSSProperties, useState } from "react";
 
-import { getCurrentWindow } from "@tauri-apps/api/window";
-import type { MouseEvent as ReactMouseEvent } from "react";
+import { isElectronRuntime, sendWindowControl } from "@/lib/desktop-api";
 
 import { cn } from "@/lib/utils";
 
-import { ThemeToggle } from "./ThemeToggle";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
-
-const isTauriRuntime =
-  typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
 type WindowTitlebarProps = {
   isAuthenticated?: boolean;
@@ -43,39 +38,13 @@ export function WindowTitlebar({
   className,
 }: WindowTitlebarProps) {
   const [searchFocused, setSearchFocused] = useState(false);
-  const appWindow = useMemo(() => {
-    if (!isTauriRuntime) {
-      return null;
-    }
-
-    return getCurrentWindow();
-  }, []);
-
-  const handleDragStart = (event: ReactMouseEvent<HTMLElement>) => {
-    if (!isTauriRuntime || !appWindow) {
-      return;
-    }
-
-    if (event.button !== 0) {
-      return;
-    }
-
-    const target = event.target as Element | null;
-    if (!target) {
-      return;
-    }
-
-    if (
-      target.closest('[data-no-drag="true"]') ||
-      target.closest("button, input, textarea, select, a, [role='button']")
-    ) {
-      return;
-    }
-
-    void appWindow.startDragging().catch(() => {
-      // ignore drag start failure
-    });
-  };
+  const isDesktopRuntime = isElectronRuntime();
+  const dragRegionStyle: CSSProperties | undefined = isDesktopRuntime
+    ? { WebkitAppRegion: "drag" as CSSProperties["WebkitAppRegion"] }
+    : undefined;
+  const noDragRegionStyle: CSSProperties | undefined = isDesktopRuntime
+    ? { WebkitAppRegion: "no-drag" as CSSProperties["WebkitAppRegion"] }
+    : undefined;
 
   const normalizedSearchKeyword = searchKeyword.trim();
   const showSuggestions =
@@ -100,7 +69,7 @@ export function WindowTitlebar({
         "absolute inset-x-0 top-0 z-40 flex h-14 items-center justify-between gap-2 border-b border-slate-200/80 bg-slate-100/95 px-3 dark:border-slate-800/80 dark:bg-slate-950/95",
         className,
       )}
-      onMouseDown={handleDragStart}
+      style={dragRegionStyle}
     >
       <div className="flex min-w-0 items-center gap-2">
         <div className="hidden text-xs font-medium tracking-[0.2em] text-slate-600 dark:text-slate-300 sm:block">
@@ -108,7 +77,7 @@ export function WindowTitlebar({
         </div>
 
         {isAuthenticated && (
-          <div className="flex items-center gap-1" data-no-drag="true">
+          <div className="flex items-center gap-1" style={noDragRegionStyle}>
             <Button
               variant="ghost"
               size="icon"
@@ -145,7 +114,7 @@ export function WindowTitlebar({
 
       <div className="flex min-w-0 flex-1 items-center justify-end gap-2 pl-2">
         {isAuthenticated && (
-          <div className="relative hidden w-full max-w-md flex-1 sm:block" data-no-drag="true">
+          <div className="relative hidden w-full max-w-md flex-1 sm:block" style={noDragRegionStyle}>
             <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
             <Input
               value={searchKeyword}
@@ -199,20 +168,15 @@ export function WindowTitlebar({
           </div>
         )}
 
-        <div data-no-drag="true">
-          <ThemeToggle />
-        </div>
-
-        {isTauriRuntime && (
-          <div className="flex items-center gap-1" data-no-drag="true">
+        {isDesktopRuntime && (
+          <div className="flex items-center gap-1" style={noDragRegionStyle}>
             <Button
               variant="ghost"
               size="icon"
               className="h-8 w-8"
               aria-label="minimize-window"
-              onMouseDown={(e) => e.stopPropagation()}
               onClick={() => {
-                void appWindow?.minimize();
+                sendWindowControl("window-min");
               }}
             >
               <Minus className="h-3.5 w-3.5" />
@@ -223,9 +187,8 @@ export function WindowTitlebar({
               size="icon"
               className="h-8 w-8"
               aria-label="maximize-window"
-              onMouseDown={(e) => e.stopPropagation()}
               onClick={() => {
-                void appWindow?.toggleMaximize();
+                sendWindowControl("window-max");
               }}
             >
               <Square className="h-3.5 w-3.5" />
@@ -236,9 +199,8 @@ export function WindowTitlebar({
               size="icon"
               className="h-8 w-8 hover:bg-rose-500/25"
               aria-label="close-window"
-              onMouseDown={(e) => e.stopPropagation()}
               onClick={() => {
-                void appWindow?.close();
+                sendWindowControl("window-close");
               }}
             >
               <X className="h-3.5 w-3.5" />
