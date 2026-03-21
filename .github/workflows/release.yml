@@ -18,7 +18,7 @@ jobs:
             args: "--mac dmg --universal"
           - platform: "ubuntu-22.04"
             os_name: "linux"
-            args: "--linux AppImage deb rpm --x64"
+            args: "--linux AppImage deb rpm tar.gz --x64"
           - platform: "windows-latest"
             os_name: "windows"
             args: "--win nsis msi --x64"
@@ -57,21 +57,26 @@ jobs:
         shell: bash
         run: |
           mkdir -p artifacts
+          VERSION=${{ github.ref_name }}
+          VERSION=${VERSION#v} # 去掉前面的 v 前缀，例如 v0.0.4 -> 0.0.4
+          
           if [ "${{ matrix.os_name }}" = "windows" ]; then
             MSI_PATH=$(find release -name "*.msi" -type f | head -n 1)
             EXE_PATH=$(find release -name "*.exe" -type f | head -n 1)
-            if [ -n "$MSI_PATH" ]; then cp "$MSI_PATH" artifacts/otomusic-windows-x64-setup.msi; fi
-            if [ -n "$EXE_PATH" ]; then cp "$EXE_PATH" artifacts/otomusic-windows-x64-setup.exe; fi
+            if [ -n "$MSI_PATH" ]; then cp "$MSI_PATH" "artifacts/OtoMusic-${VERSION}-windows-x64-setup.msi"; fi
+            if [ -n "$EXE_PATH" ]; then cp "$EXE_PATH" "artifacts/OtoMusic-${VERSION}-windows-x64-setup.exe"; fi
           elif [ "${{ matrix.os_name }}" = "macos" ]; then
             DMG_PATH=$(find release -name "*.dmg" -type f | head -n 1)
-            if [ -n "$DMG_PATH" ]; then cp "$DMG_PATH" artifacts/otomusic-macos-universal.dmg; fi
+            if [ -n "$DMG_PATH" ]; then cp "$DMG_PATH" "artifacts/OtoMusic-${VERSION}-macos-universal.dmg"; fi
           elif [ "${{ matrix.os_name }}" = "linux" ]; then
             DEB_PATH=$(find release -name "*.deb" -type f | head -n 1)
             RPM_PATH=$(find release -name "*.rpm" -type f | head -n 1)
             APPIMAGE_PATH=$(find release -name "*.AppImage" -type f | head -n 1)
-            if [ -n "$DEB_PATH" ]; then cp "$DEB_PATH" artifacts/otomusic-linux-amd64.deb; fi
-            if [ -n "$RPM_PATH" ]; then cp "$RPM_PATH" artifacts/otomusic-linux-x86_64.rpm; fi
-            if [ -n "$APPIMAGE_PATH" ]; then cp "$APPIMAGE_PATH" artifacts/otomusic-linux-x86_64.AppImage; fi
+            TAR_PATH=$(find release -name "*.tar.gz" -type f | head -n 1)
+            if [ -n "$DEB_PATH" ]; then cp "$DEB_PATH" "artifacts/OtoMusic-${VERSION}-linux-amd64.deb"; fi
+            if [ -n "$RPM_PATH" ]; then cp "$RPM_PATH" "artifacts/OtoMusic-${VERSION}-linux-x86_64.rpm"; fi
+            if [ -n "$APPIMAGE_PATH" ]; then cp "$APPIMAGE_PATH" "artifacts/OtoMusic-${VERSION}-linux-x86_64.AppImage"; fi
+            if [ -n "$TAR_PATH" ]; then cp "$TAR_PATH" "artifacts/OtoMusic-${VERSION}-linux-x86_64.tar.gz"; fi
           fi
 
       - name: upload release
