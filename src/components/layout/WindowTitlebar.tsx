@@ -210,7 +210,10 @@ export function WindowTitlebar({
               size="icon"
               className="h-8 w-8"
               aria-label="minimize-window"
-              onClick={() => void appWindow?.minimize()}
+              onMouseDown={(e) => e.stopPropagation()}
+              onClick={() => {
+                void appWindow?.minimize();
+              }}
             >
               <Minus className="h-3.5 w-3.5" />
             </Button>
@@ -220,7 +223,10 @@ export function WindowTitlebar({
               size="icon"
               className="h-8 w-8"
               aria-label="maximize-window"
-              onClick={() => void appWindow?.toggleMaximize()}
+              onMouseDown={(e) => e.stopPropagation()}
+              onClick={() => {
+                void appWindow?.toggleMaximize();
+              }}
             >
               <Square className="h-3.5 w-3.5" />
             </Button>
@@ -230,6 +236,7 @@ export function WindowTitlebar({
               size="icon"
               className="h-8 w-8 hover:bg-rose-500/25"
               aria-label="close-window"
+              onMouseDown={(e) => e.stopPropagation()}
               onClick={() => {
                 void appWindow?.close();
               }}

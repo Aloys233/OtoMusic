@@ -113,7 +113,6 @@ export default function App() {
   const currentTrack = usePlayerStore((state) => state.currentTrack);
   const currentTrackId = currentTrack?.id;
   const queue = usePlayerStore((state) => state.queue);
-  const progress = usePlayerStore((state) => state.progress);
   const isPlaying = usePlayerStore((state) => state.isPlaying);
   const setQueue = usePlayerStore((state) => state.setQueue);
   const setPlaying = usePlayerStore((state) => state.setPlaying);
@@ -435,6 +434,7 @@ export default function App() {
 
   const lyricsTarget = currentTrack
     ? {
+        songId: currentTrack.id,
         title: currentTrack.title,
         artist: currentTrack.artist,
       }
@@ -1223,7 +1223,6 @@ export default function App() {
           open={isNowPlayingSheetOpen}
           currentTrack={currentTrack}
           queue={queue}
-          progress={progress}
           isPlaying={isPlaying}
           lyrics={lyricsData}
           lyricsLoading={lyricsLoading}

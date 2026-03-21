@@ -11,7 +11,7 @@ import {
   SkipForward,
   Volume2,
 } from "lucide-react";
-import { type MouseEvent, useEffect } from "react";
+import { type MouseEvent, useEffect, useRef } from "react";
 
 import { audioEngine } from "@/lib/audio/AudioEngine";
 import { cn } from "@/lib/utils";
@@ -65,6 +65,7 @@ export function PlayerBar({
   const fallbackDuration = 225;
   const duration = Math.max(1, currentTrack?.duration ?? fallbackDuration);
   const safeProgress = Math.min(progress, duration);
+  const publishedProgressRef = useRef(-1);
 
   useEffect(() => {
     audioEngine.setVolume(volume);
@@ -109,12 +110,22 @@ export function PlayerBar({
     }
 
     let frameId = 0;
+    const PROGRESS_STEP_SECONDS = 0.04;
 
     const updateProgress = () => {
-      setProgress(audioEngine.getCurrentTime());
+      const currentTime = audioEngine.getCurrentTime();
+      const quantizedProgress =
+        Math.round(currentTime / PROGRESS_STEP_SECONDS) * PROGRESS_STEP_SECONDS;
+
+      if (quantizedProgress !== publishedProgressRef.current) {
+        publishedProgressRef.current = quantizedProgress;
+        setProgress(quantizedProgress);
+      }
+
       frameId = requestAnimationFrame(updateProgress);
     };
 
+    publishedProgressRef.current = -1;
     frameId = requestAnimationFrame(updateProgress);
     return () => {
       cancelAnimationFrame(frameId);

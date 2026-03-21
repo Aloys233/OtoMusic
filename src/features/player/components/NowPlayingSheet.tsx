@@ -13,7 +13,6 @@ type NowPlayingSheetProps = {
   open: boolean;
   currentTrack: TrackInfo | null;
   queue: TrackInfo[];
-  progress: number;
   isPlaying: boolean;
   lyrics: LyricsData;
   lyricsLoading: boolean;
@@ -33,7 +32,6 @@ export function NowPlayingSheet({
   open,
   currentTrack,
   queue,
-  progress,
   isPlaying,
   lyrics,
   lyricsLoading,
@@ -231,7 +229,6 @@ export function NowPlayingSheet({
                 ) : hasLyrics ? (
                   <AppleMusicLyrics
                     lyrics={lyrics}
-                    progress={progress}
                     duration={currentTrack.duration}
                     isPlaying={isPlaying}
                     immersive

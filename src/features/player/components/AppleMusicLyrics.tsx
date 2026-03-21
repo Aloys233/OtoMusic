@@ -1,16 +1,17 @@
 import { motion } from "framer-motion";
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import type {
   LyricsData,
   TimedLyricLine,
   TimedLyricSyllable,
 } from "@/lib/api/subsonic-client";
+import { audioEngine } from "@/lib/audio/AudioEngine";
 import { cn } from "@/lib/utils";
+import { usePlayerStore } from "@/stores/player-store";
 
 type AppleMusicLyricsProps = {
   lyrics: LyricsData;
-  progress: number;
   duration: number;
   isPlaying: boolean;
   immersive?: boolean;
@@ -24,37 +25,11 @@ type LyricGlyph = {
   key: string;
 };
 
-function createFallbackTimedLines(text: string, duration: number): TimedLyricLine[] {
-  const lines = text
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0);
-
-  if (lines.length === 0) {
-    return [];
-  }
-
-  const totalDuration = Math.max(duration, lines.length * 2.2);
-  const lineDuration = totalDuration / lines.length;
-
-  return lines.map((line, index) => {
-    const start = index * lineDuration;
-    const end = start + lineDuration;
-
-    return {
-      text: line,
-      start,
-      end,
-      syllables: [],
-    };
-  });
-}
-
 function expandSyllablesToGlyphs(
   syllables: TimedLyricSyllable[],
   lineIndex: number,
 ): LyricGlyph[] {
-  if (syllables.length === 0) {
+  if (!syllables || syllables.length === 0) {
     return [];
   }
 
@@ -74,7 +49,6 @@ function buildLineGlyphs(line: TimedLyricLine, lineIndex: number): LyricGlyph[] 
     return syllableGlyphs;
   }
 
-  // 严格时间轴模式：没有字/词级时间，就只按整行时间跳动，不做平均拆分。
   return [
     {
       text: line.text,
@@ -85,144 +59,246 @@ function buildLineGlyphs(line: TimedLyricLine, lineIndex: number): LyricGlyph[] 
   ];
 }
 
-function resolveActiveLineIndex(lines: TimedLyricLine[], progress: number) {
-  if (lines.length === 0) {
+function resolveActiveLineIndex(lines: TimedLyricLine[], currentTime: number) {
+  if (!lines || lines.length === 0) {
     return -1;
   }
 
-  const activeIndex = lines.findIndex((line, index) => {
-    const nextStart = lines[index + 1]?.start;
-    const end = typeof nextStart === "number" ? nextStart : line.end;
-    return progress >= line.start && progress < end;
-  });
+  const safeTime = Number.isFinite(currentTime) ? Math.max(0, currentTime) : 0;
+  let left = 0;
+  let right = lines.length - 1;
+  let candidate = -1;
 
-  if (activeIndex >= 0) {
-    return activeIndex;
+  while (left <= right) {
+    const middle = (left + right) >> 1;
+    const lineStart = lines[middle]?.start ?? 0;
+
+    if (lineStart <= safeTime) {
+      candidate = middle;
+      left = middle + 1;
+    } else {
+      right = middle - 1;
+    }
   }
 
-  if (progress < lines[0].start) {
-    return 0;
-  }
-
-  return lines.length - 1;
+  return candidate;
 }
 
 export function AppleMusicLyrics({
   lyrics,
-  progress,
   duration,
   isPlaying,
   immersive = false,
   className,
 }: AppleMusicLyricsProps) {
+  // 是否拥有有效的时间轴
+  const isTimed = useMemo(() => {
+    return lyrics.timedLines && lyrics.timedLines.length > 0;
+  }, [lyrics.timedLines]);
+
+  // 核心歌词行数据
   const lyricLines = useMemo(() => {
-    if (lyrics.timedLines.length > 0) {
+    if (isTimed) {
       return lyrics.timedLines;
     }
 
-    return createFallbackTimedLines(lyrics.text, duration);
-  }, [duration, lyrics.text, lyrics.timedLines]);
+    // 如果没有时间轴，则只是简单展示纯文本行，时间设为正无穷
+    return lyrics.text
+      .split(/\r?\n/)
+      .map((line) => ({
+        text: line.trim(),
+        start: Number.POSITIVE_INFINITY,
+        end: Number.POSITIVE_INFINITY,
+        syllables: [],
+      }))
+      .filter((l) => l.text.length > 0);
+  }, [isTimed, lyrics.text, lyrics.timedLines]);
 
   const lineGlyphs = useMemo(
     () => lyricLines.map((line, index) => buildLineGlyphs(line, index)),
     [lyricLines],
   );
 
-  const activeLineIndex = useMemo(
-    () => resolveActiveLineIndex(lyricLines, progress),
-    [lyricLines, progress],
-  );
+  const [activeLineIndex, setActiveLineIndex] = useState(-1);
+  const activeLineIndexRef = useRef(-1);
+  const lineRefs = useRef<Array<HTMLButtonElement | null>>([]);
+  const setProgress = usePlayerStore((state) => state.setProgress);
 
-  const lineRefs = useRef<Array<HTMLParagraphElement | null>>([]);
+  const handleSeekByLyricLine = (lineIndex: number) => {
+    if (!isTimed) {
+      return;
+    }
+
+    const line = lyricLines[lineIndex];
+    const rawStart = line?.start ?? 0;
+    if (!Number.isFinite(rawStart)) {
+      return;
+    }
+
+    const safeDuration = Number.isFinite(duration) && duration > 0 ? duration : Number.POSITIVE_INFINITY;
+    const targetSeconds = Math.max(0, Math.min(rawStart, safeDuration));
+
+    activeLineIndexRef.current = lineIndex;
+    setActiveLineIndex(lineIndex);
+    setProgress(targetSeconds);
+    void audioEngine.seek(targetSeconds).catch((error) => {
+      console.error("seek by lyric line failed", error);
+    });
+  };
+
+  // 进度同步逻辑（仅在有时轴时运行）
   useEffect(() => {
-    if (activeLineIndex < 0) {
+    if (!isTimed) {
+      setActiveLineIndex(-1);
+      return;
+    }
+
+    let frameId = 0;
+    activeLineIndexRef.current = -1;
+    setActiveLineIndex(-1);
+
+    const syncActiveLine = () => {
+      const currentTime = audioEngine.getCurrentTime();
+      const nextLineIndex = resolveActiveLineIndex(lyricLines, currentTime);
+
+      if (nextLineIndex !== activeLineIndexRef.current) {
+        activeLineIndexRef.current = nextLineIndex;
+        setActiveLineIndex(nextLineIndex);
+      }
+
+      frameId = requestAnimationFrame(syncActiveLine);
+    };
+
+    frameId = requestAnimationFrame(syncActiveLine);
+
+    return () => {
+      cancelAnimationFrame(frameId);
+    };
+  }, [isTimed, lyricLines]);
+
+  // 滚动控制（仅在有时轴时自动滚动）
+  useEffect(() => {
+    if (!isTimed || activeLineIndex < 0) {
       return;
     }
 
     const node = lineRefs.current[activeLineIndex];
-    node?.scrollIntoView({
-      block: "center",
-      behavior: isPlaying ? "smooth" : "auto",
-    });
-  }, [activeLineIndex, isPlaying]);
+    if (node) {
+      node.scrollIntoView({
+        block: "center",
+        behavior: isPlaying ? "smooth" : "auto",
+      });
+    }
+  }, [activeLineIndex, isPlaying, isTimed]);
 
   return (
     <div
       className={cn(
+        "h-full overflow-y-auto scrollbar-none",
         immersive
-          ? "h-full overflow-y-auto px-4 py-4 sm:px-8 sm:py-6 lg:px-12 lg:py-8"
-          : "h-full overflow-y-auto rounded-2xl border border-slate-200/80 bg-white/70 px-5 py-6 dark:border-slate-800/80 dark:bg-slate-950/65",
+          ? "px-4 py-4 sm:px-8 sm:py-6 lg:px-12 lg:py-8"
+          : "rounded-2xl border border-slate-200/80 bg-white/70 px-5 py-6 dark:border-slate-800/80 dark:bg-slate-950/65",
         className,
       )}
     >
-      <div className={cn(immersive ? "space-y-6 py-20 lg:space-y-8 lg:py-28" : "space-y-4 py-20")}>
+      <div
+        className={cn(
+          immersive
+            ? isTimed
+              ? "space-y-6 py-48 lg:space-y-8 lg:py-64"
+              : "space-y-3 py-10"
+            : "space-y-4 py-32",
+        )}
+      >
         {lyricLines.map((line, lineIndex) => {
           const isActiveLine = lineIndex === activeLineIndex;
-          const isPastLine = progress >= line.end;
+          const isPastLine = activeLineIndex >= 0 && lineIndex < activeLineIndex;
           const glyphs = lineGlyphs[lineIndex] ?? [];
+          const canSeek = isTimed && Number.isFinite(line.start);
+          const lineClassName = cn(
+            "w-full bg-transparent p-0 text-left transition-all duration-500 will-change-transform",
+            // 沉浸模式样式
+            immersive && [
+              isTimed
+                ? "text-[clamp(1.9rem,3.05vw,3rem)] font-bold leading-[1.24] tracking-tight"
+                : "text-[1.2rem] font-medium leading-[1.6] text-white/80", // 非时轴模式变小
+              isTimed &&
+                (isActiveLine
+                  ? "scale-105 opacity-100 blur-0 text-white"
+                  : isPastLine
+                    ? "scale-95 opacity-35 blur-[1px] text-white"
+                    : "scale-95 opacity-45 blur-0 text-white"),
+            ],
+            // 普通模式样式
+            !immersive && [
+              isTimed
+                ? "text-[1.45rem] font-semibold leading-[1.45] tracking-tight"
+                : "text-[1.1rem] font-normal leading-[1.6] text-slate-600 dark:text-slate-400", // 非时轴模式变小
+              isTimed &&
+                (isActiveLine
+                  ? "text-slate-900 scale-100 opacity-100 dark:text-white"
+                  : isPastLine
+                    ? "text-slate-700/75 scale-[0.98] opacity-60 dark:text-slate-300/75"
+                    : "text-slate-400 scale-[0.98] opacity-50 dark:text-slate-500"),
+            ],
+            canSeek
+              ? "cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/45"
+              : "cursor-default",
+            canSeek && !isActiveLine && (immersive ? "hover:text-white/90" : "hover:text-slate-300"),
+          );
+          const lineContent = glyphs.map((glyph) => {
+            const state = isActiveLine && isPlaying ? "active" : "idle";
+
+            return (
+              <motion.span
+                key={glyph.key}
+                variants={{
+                  idle: { y: 0 },
+                  active: immersive
+                    ? { y: [0, -2, 0] }
+                    : { y: [0, -4, 0] },
+                }}
+                animate={isTimed ? state : "idle"}
+                transition={
+                  state === "active"
+                    ? { duration: 0.3, ease: "easeOut" }
+                    : { duration: 0.2 }
+                }
+                className={cn(
+                  "inline-block whitespace-pre-wrap transition-colors duration-300",
+                  immersive
+                    ? "text-current"
+                    : isTimed && isActiveLine
+                      ? "text-slate-900 dark:text-slate-100"
+                      : "text-inherit",
+                )}
+              >
+                {glyph.text}
+              </motion.span>
+            );
+          });
+
+          if (canSeek) {
+            return (
+              <button
+                type="button"
+                key={`${line.start}-${lineIndex}`}
+                onClick={() => {
+                  handleSeekByLyricLine(lineIndex);
+                }}
+                ref={(node) => {
+                  lineRefs.current[lineIndex] = node;
+                }}
+                className={lineClassName}
+              >
+                {lineContent}
+              </button>
+            );
+          }
 
           return (
-            <p
-              key={`${line.start}-${lineIndex}`}
-              ref={(node) => {
-                lineRefs.current[lineIndex] = node;
-              }}
-              className={cn(
-                immersive
-                  ? "text-[clamp(1.9rem,3.05vw,3rem)] font-semibold leading-[1.24] tracking-tight text-white transition-all duration-300"
-                  : "text-[1.45rem] font-semibold leading-[1.45] tracking-tight transition-all duration-300",
-                immersive
-                  ? isActiveLine
-                    ? "scale-[1.04] opacity-100"
-                    : "scale-[0.98] opacity-45"
-                  : isActiveLine
-                    ? "text-slate-900 dark:text-white"
-                    : isPastLine
-                      ? "text-slate-700/75 dark:text-slate-300/75"
-                      : "text-slate-400 dark:text-slate-500",
-                !immersive && !isActiveLine && "scale-[0.98]",
-              )}
-            >
-              {glyphs.map((glyph) => {
-                const isPastGlyph = progress >= glyph.end;
-                const isActiveGlyph = progress >= glyph.start && progress < glyph.end;
-                const state = isActiveGlyph && isPlaying ? "active" : "idle";
-
-                return (
-                  <motion.span
-                    key={glyph.key}
-                    variants={{
-                      idle: { y: 0, scale: 1 },
-                      active: immersive
-                        ? { y: [0, -2, 0], scale: [1, 1.04, 1] }
-                        : { y: [0, -5, 0], scale: [1, 1.1, 1] },
-                    }}
-                    animate={state}
-                    transition={
-                      state === "active"
-                        ? {
-                            duration: immersive ? 0.22 : 0.34,
-                            ease: [0.22, 1, 0.36, 1],
-                            times: [0, 0.45, 1],
-                          }
-                        : {
-                            duration: 0.18,
-                            ease: "easeOut",
-                          }
-                    }
-                    className={cn(
-                      "inline-block whitespace-pre transition-colors duration-200",
-                      immersive
-                        ? "text-current"
-                        : isActiveGlyph || isPastGlyph
-                          ? "text-slate-900 dark:text-slate-100"
-                          : "text-slate-400 dark:text-slate-500",
-                    )}
-                  >
-                    {glyph.text}
-                  </motion.span>
-                );
-              })}
+            <p key={`${line.start}-${lineIndex}`} className={lineClassName}>
+              {lineContent}
             </p>
           );
         })}

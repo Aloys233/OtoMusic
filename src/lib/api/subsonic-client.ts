@@ -54,7 +54,6 @@ type AuthParams = {
 
 const DEFAULT_API_VERSION = "1.16.1";
 const DEFAULT_CLIENT_NAME = "OtoMusic";
-const LRC_METADATA_REGEX = /^\[(ti|ar|al|by|offset|re):/i;
 
 export type TimedLyricSyllable = {
   text: string;
@@ -79,19 +78,6 @@ type TimeCandidate = {
   isClockFormat: boolean;
 };
 
-type RawStructuredLyricLine = {
-  text: string;
-  start: TimeCandidate | null;
-  end: TimeCandidate | null;
-  duration: TimeCandidate | null;
-  syllables: Array<{
-    text: string;
-    start: TimeCandidate | null;
-    end: TimeCandidate | null;
-    duration: TimeCandidate | null;
-  }>;
-};
-
 type NormalizableLyricLine = {
   text: string;
   start: number;
@@ -99,137 +85,24 @@ type NormalizableLyricLine = {
   syllables?: TimedLyricSyllable[];
 };
 
-function parseFractionalSeconds(fraction?: string) {
-  if (!fraction) {
-    return 0;
-  }
-
-  if (!/^\d+$/.test(fraction)) {
-    return 0;
-  }
-
-  if (fraction.length === 3) {
-    return Number.parseInt(fraction, 10) / 1000;
-  }
-
-  if (fraction.length === 2) {
-    return Number.parseInt(fraction, 10) / 100;
-  }
-
-  return Number.parseInt(fraction, 10) / 10;
-}
-
 function parseClockTime(value: string) {
   const match = value.trim().match(/^(\d{1,2}):(\d{2})(?:[.:](\d{1,3}))?$/);
-  if (!match) {
-    return null;
-  }
+  if (!match) return null;
 
   const minutes = Number.parseInt(match[1], 10);
   const seconds = Number.parseInt(match[2], 10);
+  const fraction = match[3] || "0";
+  const fractionSeconds = Number.parseInt(fraction, 10) / Math.pow(10, fraction.length);
 
-  if (!Number.isFinite(minutes) || !Number.isFinite(seconds)) {
-    return null;
-  }
-
-  return minutes * 60 + seconds + parseFractionalSeconds(match[3]);
-}
-
-function parseTimeCandidate(value: unknown): TimeCandidate | null {
-  if (typeof value === "number") {
-    if (!Number.isFinite(value)) {
-      return null;
-    }
-    return {
-      raw: value,
-      isClockFormat: false,
-    };
-  }
-
-  if (typeof value !== "string") {
-    return null;
-  }
-
-  const normalized = value.trim();
-  if (!normalized) {
-    return null;
-  }
-
-  const clock = parseClockTime(normalized);
-  if (clock !== null) {
-    return {
-      raw: clock,
-      isClockFormat: true,
-    };
-  }
-
-  const numeric = Number.parseFloat(normalized);
-  if (!Number.isFinite(numeric)) {
-    return null;
-  }
-
-  return {
-    raw: numeric,
-    isClockFormat: false,
-  };
-}
-
-function toSeconds(candidate: TimeCandidate | null, divisor: number) {
-  if (!candidate) {
-    return null;
-  }
-
-  if (candidate.isClockFormat) {
-    return Math.max(0, candidate.raw);
-  }
-
-  return Math.max(0, candidate.raw / divisor);
-}
-
-function inferTimeDivisor(candidates: TimeCandidate[]) {
-  const numericValues = candidates
-    .filter((item) => !item.isClockFormat)
-    .map((item) => item.raw)
-    .filter((item) => Number.isFinite(item));
-
-  if (numericValues.length === 0) {
-    return 1;
-  }
-
-  const hasFractional = numericValues.some((value) => !Number.isInteger(value));
-  if (hasFractional) {
-    return 1;
-  }
-
-  const sorted = [...numericValues].sort((a, b) => a - b);
-  const positiveDiffs: number[] = [];
-  for (let index = 1; index < sorted.length; index += 1) {
-    const diff = sorted[index] - sorted[index - 1];
-    if (diff > 0) {
-      positiveDiffs.push(diff);
-    }
-  }
-
-  const maxValue = sorted[sorted.length - 1] ?? 0;
-  const medianDiff =
-    positiveDiffs.length > 0
-      ? positiveDiffs[Math.floor(positiveDiffs.length / 2)] ?? 0
-      : 0;
-
-  // 毫秒时间轴通常是 5 位数以上，且相邻时间差常见在百级以上。
-  if (maxValue >= 10_000 || medianDiff >= 100) {
-    return 1000;
-  }
-
-  return 1;
+  return minutes * 60 + seconds + fractionSeconds;
 }
 
 function normalizeLyricText(value: unknown) {
-  if (typeof value !== "string") {
-    return "";
-  }
+  return typeof value === "string" ? value.replace(/\r/g, "").trim() : "";
+}
 
-  return value.replace(/\r/g, "").trim();
+function previewLyricText(value: string, maxLength = 64) {
+  return value.slice(0, maxLength).replace(/\n/g, "\\n");
 }
 
 function estimateLineDuration(text: string) {
@@ -238,375 +111,254 @@ function estimateLineDuration(text: string) {
 }
 
 function normalizeLyricLines(lines: NormalizableLyricLine[]): TimedLyricLine[] {
-  const sorted = lines
-    .map((line) => ({
-      ...line,
-      text: normalizeLyricText(line.text),
-      start: Math.max(0, line.start),
-    }))
-    .filter((line) => line.text.length > 0)
+  const processed = lines
+    .map((l) => ({ ...l, text: normalizeLyricText(l.text) || " ", start: Math.max(0, l.start) }))
     .sort((a, b) => a.start - b.start);
 
-  return sorted.map((line, index) => {
-    const nextStart = sorted[index + 1]?.start;
+  if (processed.length === 0) return [];
+
+  const merged: NormalizableLyricLine[] = [];
+  for (const line of processed) {
+    const last = merged[merged.length - 1];
+    if (last && Math.abs(last.start - line.start) < 0.02 && line.text.trim() && last.text.trim()) {
+      last.text += `\n${line.text}`;
+    } else {
+      merged.push({ ...line });
+    }
+  }
+
+  return merged.map((line, index) => {
+    const nextStart = merged[index + 1]?.start;
+    const explicitEnd = typeof line.end === "number" && Number.isFinite(line.end) ? line.end : undefined;
     const fallbackEnd = line.start + estimateLineDuration(line.text);
-    const derivedEnd = typeof nextStart === "number" ? nextStart - 0.04 : fallbackEnd;
-    const end = Math.max(line.start + 0.24, line.end ?? derivedEnd);
+    const nextBound = typeof nextStart === "number" ? Math.max(line.start + 0.1, nextStart - 0.01) : undefined;
+    let end = explicitEnd ?? nextBound ?? fallbackEnd;
+    if (typeof explicitEnd === "number" && typeof nextBound === "number") {
+      end = Math.min(explicitEnd, nextBound);
+    }
+    if (!Number.isFinite(end) || end <= line.start) {
+      end = line.start + 0.1;
+    }
 
-    const normalizedSyllables = (line.syllables ?? [])
-      .map((syllable) => ({
-        ...syllable,
-        text: normalizeLyricText(syllable.text),
-        start: Math.max(line.start, syllable.start),
-      }))
-      .filter((syllable) => syllable.text.length > 0)
-      .sort((a, b) => a.start - b.start)
-      .map((syllable, syllableIndex, list) => {
-        const nextSyllableStart = list[syllableIndex + 1]?.start ?? end;
-        const boundedEnd = Math.min(
-          end,
-          Math.max(
-            syllable.start + 0.05,
-            Math.min(syllable.end, nextSyllableStart),
-          ),
-        );
-
-        return {
-          text: syllable.text,
-          start: syllable.start,
-          end: boundedEnd,
-        };
-      })
-      .filter((syllable) => syllable.end > syllable.start);
-
-    return {
-      text: line.text,
-      start: line.start,
-      end,
-      syllables: normalizedSyllables,
-    };
+    return { text: line.text, start: line.start, end, syllables: [] };
   });
 }
 
-function parseStructuredLyrics(
-  structuredLyrics:
-    | Array<{
-        line?: Array<Record<string, unknown>>;
-      }>
-    | undefined,
-): TimedLyricLine[] {
-  if (!structuredLyrics?.length) {
-    return [];
-  }
+function parseLrc(rawLyrics: string): LyricsData | null {
+  if (!rawLyrics || !rawLyrics.trim()) return null;
 
-  const parseStructuredLine = (line: Record<string, unknown>): RawStructuredLyricLine => {
-    const text = normalizeLyricText(line.value) || normalizeLyricText(line.text);
-    const start = parseTimeCandidate(line.start ?? line.startTime ?? line.time ?? line.offset);
-    const end = parseTimeCandidate(line.end ?? line.endTime);
-    const duration = parseTimeCandidate(line.duration ?? line.length);
-
-    const syllableCandidates = ["syllable", "syllables", "word", "words", "segment", "segments"];
-    const syllables: RawStructuredLyricLine["syllables"] = [];
-
-    for (const key of syllableCandidates) {
-      const value = line[key];
-      if (!Array.isArray(value)) {
-        continue;
-      }
-
-      for (const rawPart of value) {
-        if (!rawPart || typeof rawPart !== "object") {
-          continue;
-        }
-
-        const part = rawPart as Record<string, unknown>;
-        const partText =
-          normalizeLyricText(part.value) ||
-          normalizeLyricText(part.text) ||
-          normalizeLyricText(part.word) ||
-          normalizeLyricText(part.syllable);
-
-        if (!partText) {
-          continue;
-        }
-
-        syllables.push({
-          text: partText,
-          start: parseTimeCandidate(part.start ?? part.startTime ?? part.time ?? part.offset),
-          end: parseTimeCandidate(part.end ?? part.endTime),
-          duration: parseTimeCandidate(part.duration ?? part.length),
-        });
-      }
-
-      if (syllables.length > 0) {
-        break;
-      }
-    }
-
-    return {
-      text,
-      start,
-      end,
-      duration,
-      syllables,
-    };
-  };
-
-  const parseStructuredBlock = (
-    block: {
-      line?: Array<Record<string, unknown>>;
-    },
-  ): TimedLyricLine[] => {
-    const rawLines = (block.line ?? [])
-      .filter((item): item is Record<string, unknown> => Boolean(item && typeof item === "object"))
-      .map(parseStructuredLine)
-      .filter((item) => item.text.length > 0);
-
-    if (rawLines.length === 0) {
-      return [];
-    }
-
-    const hasRealTiming = rawLines.some((line) =>
-      Boolean(line.start || line.end || line.duration) ||
-      line.syllables.some((syllable) => Boolean(syllable.start || syllable.end || syllable.duration)),
-    );
-
-    if (!hasRealTiming) {
-      return [];
-    }
-
-    const timeCandidates: TimeCandidate[] = [];
-    for (const line of rawLines) {
-      if (line.start) {
-        timeCandidates.push(line.start);
-      }
-      if (line.end) {
-        timeCandidates.push(line.end);
-      }
-      if (line.duration) {
-        timeCandidates.push(line.duration);
-      }
-
-      for (const syllable of line.syllables) {
-        if (syllable.start) {
-          timeCandidates.push(syllable.start);
-        }
-        if (syllable.end) {
-          timeCandidates.push(syllable.end);
-        }
-        if (syllable.duration) {
-          timeCandidates.push(syllable.duration);
-        }
-      }
-    }
-
-    const divisor = inferTimeDivisor(timeCandidates);
-    let fallbackLineStart = 0;
-
-    const normalizable = rawLines.map((line) => {
-      const lineStart = toSeconds(line.start, divisor) ?? fallbackLineStart;
-      const lineDuration = toSeconds(line.duration, divisor);
-      const explicitLineEnd = toSeconds(line.end, divisor);
-      const lineEnd = explicitLineEnd ?? (lineDuration ? lineStart + lineDuration : undefined);
-
-      let fallbackSyllableStart = lineStart;
-      const syllables = line.syllables.map((syllable) => {
-        const syllableStart = toSeconds(syllable.start, divisor) ?? fallbackSyllableStart;
-        const syllableDuration = toSeconds(syllable.duration, divisor);
-        const explicitSyllableEnd = toSeconds(syllable.end, divisor);
-        const syllableEnd =
-          explicitSyllableEnd ??
-          (syllableDuration ? syllableStart + syllableDuration : syllableStart + 0.08);
-
-        fallbackSyllableStart = syllableEnd;
-        return {
-          text: syllable.text,
-          start: syllableStart,
-          end: syllableEnd,
-        };
-      });
-
-      fallbackLineStart = lineEnd ?? (lineStart + estimateLineDuration(line.text));
-      return {
-        text: line.text,
-        start: lineStart,
-        end: lineEnd,
-        syllables,
-      };
-    });
-
-    return normalizeLyricLines(normalizable);
-  };
-
-  let bestTimedLines: TimedLyricLine[] = [];
-  let bestScore = -1;
-
-  for (const block of structuredLyrics) {
-    const parsed = parseStructuredBlock(block);
-    if (parsed.length === 0) {
-      continue;
-    }
-
-    const score = parsed.reduce(
-      (sum, line) => sum + (line.syllables.length > 0 ? 10 + line.syllables.length : 1),
-      0,
-    );
-
-    if (score > bestScore) {
-      bestTimedLines = parsed;
-      bestScore = score;
-    }
-  }
-
-  return bestTimedLines;
-}
-
-function parseLrcTimestamp(minutes: string, seconds: string, fraction?: string) {
-  const mm = Number.parseInt(minutes, 10);
-  const ss = Number.parseInt(seconds, 10);
-  if (!Number.isFinite(mm) || !Number.isFinite(ss)) {
-    return null;
-  }
-
-  return mm * 60 + ss + parseFractionalSeconds(fraction);
-}
-
-function parseInlineTimedSyllables(lineContent: string, baseOffset: number): TimedLyricSyllable[] {
-  const inlineTimestampRegex = /<(\d{1,2}):(\d{2})(?:[.:](\d{1,3}))?>/g;
-  const inlineMatches = Array.from(lineContent.matchAll(inlineTimestampRegex));
-  if (inlineMatches.length === 0) {
-    return [];
-  }
-
-  const parsed: TimedLyricSyllable[] = [];
-
-  inlineMatches.forEach((match, index) => {
-    const start = parseLrcTimestamp(match[1], match[2], match[3]);
-    if (start === null) {
-      return;
-    }
-
-    const contentStart = (match.index ?? 0) + match[0].length;
-    const contentEnd = inlineMatches[index + 1]?.index ?? lineContent.length;
-    const text = normalizeLyricText(lineContent.slice(contentStart, contentEnd));
-    if (!text) {
-      return;
-    }
-
-    const nextStartMatch = inlineMatches[index + 1];
-    const nextStart = nextStartMatch
-      ? parseLrcTimestamp(nextStartMatch[1], nextStartMatch[2], nextStartMatch[3])
-      : null;
-    const fallbackEnd = start + Math.max(0.08, Math.min(0.6, Array.from(text).length * 0.1));
-
-    parsed.push({
-      text,
-      start: start + baseOffset,
-      end: (nextStart ?? fallbackEnd) + baseOffset,
-    });
-  });
-
-  return parsed;
-}
-
-function parseLrcLyrics(rawLyrics: string): LyricsData | null {
-  const rows = rawLyrics.split(/\r?\n/);
+  const normalizedRawLyrics = rawLyrics.replace(/［/g, "[").replace(/］/g, "]");
+  const rows = normalizedRawLyrics.split(/\r?\n/);
   const entries: NormalizableLyricLine[] = [];
   let offsetSeconds = 0;
 
   for (const row of rows) {
-    const offsetMatch = row.trim().match(/^\[offset:([+-]?\d+)\]$/i);
-    if (!offsetMatch) {
-      continue;
-    }
-
-    const offsetMs = Number.parseInt(offsetMatch[1], 10);
-    if (Number.isFinite(offsetMs)) {
-      offsetSeconds = offsetMs / 1000;
-    }
+    const match = row.match(/\[offset:([+-]?\d+)\]/i);
+    if (match) offsetSeconds = Number.parseInt(match[1], 10) / 1000;
   }
+
+  const tsRegex = /\[(\d+):(\d{2})(?::(\d{2}))?(?:[.:,](\d{1,3}))?\]/g;
 
   for (const row of rows) {
-    const normalizedRow = row.trim();
-    if (!normalizedRow || LRC_METADATA_REGEX.test(normalizedRow)) {
+    const line = row.trim();
+    if (!line) continue;
+    const matches = Array.from(line.matchAll(tsRegex));
+    if (matches.length === 0) {
+      const looseMatch = line.match(
+        /^(\d{1,2}):(\d{2})(?::(\d{2}))?(?:[.:,](\d{1,3}))?\s*(.*)$/,
+      );
+      if (!looseMatch) continue;
+
+      const p1 = Number.parseInt(looseMatch[1], 10);
+      const p2 = Number.parseInt(looseMatch[2], 10);
+      const p3 = looseMatch[3] ? Number.parseInt(looseMatch[3], 10) : null;
+      const frac = looseMatch[4] || "0";
+      const fractionSeconds = Number.parseInt(frac, 10) / Math.pow(10, frac.length);
+      const text = looseMatch[5]?.trim() || " ";
+      const time = p3 !== null ? p1 * 3600 + p2 * 60 + p3 + fractionSeconds : p1 * 60 + p2 + fractionSeconds;
+      entries.push({ text, start: time + offsetSeconds });
+      continue;
+    }
+    const text = line.replace(tsRegex, "").trim();
+    
+    for (const match of matches) {
+      let time = 0;
+      const p1 = Number.parseInt(match[1], 10);
+      const p2 = Number.parseInt(match[2], 10);
+      const p3 = match[3] ? Number.parseInt(match[3], 10) : null;
+      const frac = match[4] || "0";
+      const fractionSeconds = Number.parseInt(frac, 10) / Math.pow(10, frac.length);
+      time = p3 !== null ? p1 * 3600 + p2 * 60 + p3 + fractionSeconds : p1 * 60 + p2 + fractionSeconds;
+      entries.push({ text: text || " ", start: time + offsetSeconds });
+    }
+  }
+
+  if (entries.length === 0) return null;
+  const timedLines = normalizeLyricLines(entries);
+  return { text: timedLines.map((l) => l.text).join("\n"), timedLines };
+}
+
+function parseTimeCandidate(value: unknown): TimeCandidate | null {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return { raw: value, isClockFormat: false };
+  }
+
+  if (typeof value !== "string") {
+    return null;
+  }
+
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return null;
+  }
+
+  const clock = parseClockTime(trimmed);
+  if (clock !== null) {
+    return { raw: clock, isClockFormat: true };
+  }
+
+  const numeric = Number.parseFloat(trimmed);
+  if (!Number.isFinite(numeric)) {
+    return null;
+  }
+  return { raw: numeric, isClockFormat: false };
+}
+
+function inferMilliseconds(candidates: TimeCandidate[]) {
+  if (candidates.length === 0) {
+    return false;
+  }
+  if (candidates.some((candidate) => candidate.isClockFormat)) {
+    return false;
+  }
+  const values = candidates.map((candidate) => candidate.raw).filter((value) => Number.isFinite(value));
+  if (values.length === 0) {
+    return false;
+  }
+  const max = Math.max(...values);
+  if (max >= 10_000) {
+    return true;
+  }
+  return max >= 1_000 && values.every((value) => Number.isInteger(value));
+}
+
+function resolveTimeSeconds(value: unknown, assumeMilliseconds: boolean) {
+  const candidate = parseTimeCandidate(value);
+  if (!candidate) {
+    return null;
+  }
+  const seconds = candidate.isClockFormat
+    ? candidate.raw
+    : assumeMilliseconds
+      ? candidate.raw / 1000
+      : candidate.raw;
+  return Number.isFinite(seconds) ? Math.max(0, seconds) : null;
+}
+
+function parseStructuredLyrics(rawStructuredLyrics: unknown): LyricsData | null {
+  const blocks = Array.isArray(rawStructuredLyrics)
+    ? rawStructuredLyrics
+    : rawStructuredLyrics
+      ? [rawStructuredLyrics]
+      : [];
+
+  for (const block of blocks) {
+    if (!block || typeof block !== "object") {
       continue;
     }
 
-    const lineTimestampRegex = /\[(\d{1,2}):(\d{2})(?:[.:](\d{1,3}))?\]/g;
-    const timestampMatches = Array.from(normalizedRow.matchAll(lineTimestampRegex));
-    if (timestampMatches.length === 0) {
+    const payload = block as Record<string, unknown>;
+    const rawLines = payload.line ?? payload.lines;
+    if (!Array.isArray(rawLines) || rawLines.length === 0) {
       continue;
     }
 
-    const lineContent = normalizeLyricText(
-      normalizedRow.replace(lineTimestampRegex, "").replace(/\s+/g, " "),
-    );
+    const startCandidates = rawLines
+      .map((line) => {
+        if (!line || typeof line !== "object") {
+          return null;
+        }
+        return parseTimeCandidate((line as Record<string, unknown>).start);
+      })
+      .filter((candidate): candidate is TimeCandidate => Boolean(candidate));
+    const assumeMilliseconds = inferMilliseconds(startCandidates);
 
-    if (!lineContent) {
-      continue;
-    }
+    const offsetCandidate = parseTimeCandidate(payload.offset);
+    const offsetSeconds = offsetCandidate
+      ? offsetCandidate.isClockFormat
+        ? offsetCandidate.raw
+        : Math.abs(offsetCandidate.raw) >= 1_000
+          ? offsetCandidate.raw / 1000
+          : offsetCandidate.raw
+      : 0;
 
-    const lineTimestamps = timestampMatches
-      .map((match) => parseLrcTimestamp(match[1], match[2], match[3]))
-      .filter((value): value is number => value !== null)
-      .sort((a, b) => a - b);
+    const entries: NormalizableLyricLine[] = [];
 
-    if (lineTimestamps.length === 0) {
-      continue;
-    }
+    for (const rawLine of rawLines) {
+      if (!rawLine || typeof rawLine !== "object") {
+        continue;
+      }
+      const line = rawLine as Record<string, unknown>;
+      const text = normalizeLyricText(line.value ?? line.text);
+      const start = resolveTimeSeconds(line.start, assumeMilliseconds);
+      if (start === null) {
+        continue;
+      }
 
-    const cleanText = normalizeLyricText(
-      lineContent.replace(/<(\d{1,2}):(\d{2})(?:[.:](\d{1,3}))?>/g, ""),
-    );
-    const firstTimestamp = lineTimestamps[0] ?? 0;
-    const templateSyllables = parseInlineTimedSyllables(lineContent, 0);
+      const duration = resolveTimeSeconds(line.duration, assumeMilliseconds);
+      const explicitEnd = resolveTimeSeconds(line.end, assumeMilliseconds);
+      const end = explicitEnd ?? (duration !== null ? start + duration : undefined);
 
-    for (const timestamp of lineTimestamps) {
-      const offset = timestamp - firstTimestamp;
       entries.push({
-        text: cleanText,
-        start: timestamp + offsetSeconds,
-        syllables: templateSyllables.map((syllable) => ({
-          text: syllable.text,
-          start: syllable.start + offset + offsetSeconds,
-          end: syllable.end + offset + offsetSeconds,
-        })),
+        text: text || " ",
+        start: start + offsetSeconds,
+        end: typeof end === "number" ? end + offsetSeconds : undefined,
       });
     }
+
+    if (entries.length === 0) {
+      continue;
+    }
+
+    const timedLines = normalizeLyricLines(entries);
+    if (timedLines.length === 0) {
+      continue;
+    }
+
+    return {
+      text: timedLines.map((line) => line.text).join("\n"),
+      timedLines,
+    };
   }
 
-  if (entries.length === 0) {
-    return null;
-  }
+  return null;
+}
 
-  const timedLines = normalizeLyricLines(entries);
-  if (timedLines.length === 0) {
-    return null;
-  }
+type LyricsApiPayload = {
+  lyrics?: { value?: string };
+  lyricsList?: { lyrics?: Array<{ value?: string }>; structuredLyrics?: unknown[] };
+  structuredLyrics?: unknown[];
+};
 
-  return {
-    text: timedLines.map((line) => line.text).join("\n"),
-    timedLines,
-  };
+function collectTextLyricsCandidates(payload: LyricsApiPayload): string[] {
+  return [payload.lyrics?.value, ...(payload.lyricsList?.lyrics?.map((line) => line.value) ?? [])].filter(
+    (value): value is string => typeof value === "string" && normalizeLyricText(value).length > 0,
+  );
+}
+
+function collectStructuredLyricsCandidates(payload: LyricsApiPayload): unknown[] {
+  return [...(payload.lyricsList?.structuredLyrics ?? []), ...(payload.structuredLyrics ?? [])];
 }
 
 export class SubsonicClient {
   private readonly http: AxiosInstance;
-
   private readonly normalizedBaseUrl: string;
-
   private readonly username: string;
-
   private readonly password: string;
-
   private readonly apiVersion: string;
-
   private readonly clientName: string;
-
   private readonly authParams: AuthParams;
-
   private readonly coverArtUrlCache = new Map<string, string>();
-
   private readonly streamUrlCache = new Map<string, string>();
 
   constructor(config: SubsonicClientConfig) {
@@ -616,11 +368,7 @@ export class SubsonicClient {
     this.apiVersion = config.apiVersion ?? DEFAULT_API_VERSION;
     this.clientName = config.clientName ?? DEFAULT_CLIENT_NAME;
     this.authParams = this.createAuthParams();
-
-    this.http = axios.create({
-      baseURL: this.normalizedBaseUrl,
-      timeout: config.timeoutMs ?? 12_000,
-    });
+    this.http = axios.create({ baseURL: this.normalizedBaseUrl, timeout: config.timeoutMs ?? 12_000 });
   }
 
   async ping() {
@@ -630,13 +378,8 @@ export class SubsonicClient {
   async getAlbumList2(type: AlbumListType = "newest", size = 40, offset = 0) {
     const response = await this.get<{ albumList2?: { album?: SubsonicAlbum[] } }>(
       "/rest/getAlbumList2.view",
-      {
-        type,
-        size,
-        offset,
-      },
+      { type, size, offset },
     );
-
     return response.albumList2?.album ?? [];
   }
 
@@ -645,189 +388,120 @@ export class SubsonicClient {
       "/rest/getAlbum.view",
       { id },
     );
-
     if (!response.album) {
       const error = new Error(`Album not found: ${id}`) as SubsonicError;
       error.code = 404;
       throw error;
     }
-
-    return {
-      ...response.album,
-      song: response.album.song ?? [],
-    };
+    return { ...response.album, song: response.album.song ?? [] };
   }
 
   async search3(query: string, songCount = 20, albumCount = 20) {
     const response = await this.get<{
-      searchResult3?: {
-        album?: SubsonicAlbum[];
-        song?: SubsonicSong[];
-      };
-    }>("/rest/search3.view", {
-      query,
-      songCount,
-      albumCount,
-      artistCount: 0,
-    });
-
-    return {
-      albums: response.searchResult3?.album ?? [],
-      songs: response.searchResult3?.song ?? [],
-    };
+      searchResult3?: { album?: SubsonicAlbum[]; song?: SubsonicSong[] };
+    }>("/rest/search3.view", { query, songCount, albumCount, artistCount: 0 });
+    return { albums: response.searchResult3?.album ?? [], songs: response.searchResult3?.song ?? [] };
   }
 
-  async getLyrics(artist: string, title: string): Promise<LyricsData> {
-    const response = await this.get<{
-      lyrics?: {
-        artist?: string;
-        title?: string;
-        value?: string;
-      };
-      lyricsList?: {
-        structuredLyrics?: Array<{
-          line?: Array<Record<string, unknown>>;
-        }>;
-        lyrics?: Array<{
-          value?: string;
-        }>;
-      };
-    }>("/rest/getLyrics.view", {
-      artist,
-      title,
-    });
+  async getLyrics(artist: string, title: string, songId?: string): Promise<LyricsData> {
+    console.log(`[Lyrics] 正在获取歌词: ${artist} - ${title}${songId ? ` (songId=${songId})` : ""}`);
+    const fallbackTexts: string[] = [];
 
-    const structuredTimedLines = parseStructuredLyrics(response.lyricsList?.structuredLyrics);
-    if (structuredTimedLines.length > 0) {
-      return {
-        text: structuredTimedLines.map((line) => line.text).join("\n"),
-        timedLines: structuredTimedLines,
-      };
-    }
+    const tryParsePayload = (payload: LyricsApiPayload, source: string): LyricsData | null => {
+      const structuredCandidates = collectStructuredLyricsCandidates(payload);
+      const textCandidates = collectTextLyricsCandidates(payload);
+      console.log(
+        `[Lyrics] ${source}: 结构化源 ${structuredCandidates.length} 个，文本源 ${textCandidates.length} 个`,
+      );
 
-    const simpleLyrics = response.lyrics?.value?.trim();
-    if (simpleLyrics) {
-      const lrcParsed = parseLrcLyrics(simpleLyrics);
-      if (lrcParsed) {
-        return lrcParsed;
+      for (let i = 0; i < structuredCandidates.length; i++) {
+        const parsed = parseStructuredLyrics(structuredCandidates[i]);
+        if (parsed && parsed.timedLines.length > 0) {
+          console.log(`[Lyrics] ${source}: 结构化歌词解析成功，提取到 ${parsed.timedLines.length} 行`);
+          return parsed;
+        }
       }
 
-      return {
-        text: simpleLyrics,
-        timedLines: [],
-      };
-    }
-
-    const listLyrics = response.lyricsList?.lyrics?.find((item) => item.value?.trim())?.value;
-    if (listLyrics) {
-      const normalized = listLyrics.trim();
-      const lrcParsed = parseLrcLyrics(normalized);
-      if (lrcParsed) {
-        return lrcParsed;
+      for (let i = 0; i < textCandidates.length; i++) {
+        const raw = textCandidates[i]!;
+        console.log(`[Lyrics] ${source}: 正在解析文本源 ${i + 1}: ${previewLyricText(raw)}...`);
+        const parsed = parseLrc(raw);
+        if (parsed && parsed.timedLines.length > 0) {
+          console.log(`[Lyrics] ${source}: 文本歌词解析成功，提取到 ${parsed.timedLines.length} 行`);
+          return parsed;
+        }
       }
 
-      return {
-        text: normalized,
-        timedLines: [],
-      };
-    }
-
-    const structuredText = response.lyricsList?.structuredLyrics?.[0]?.line
-      ?.map((item) => normalizeLyricText(item.value ?? item.text))
-      .filter((value): value is string => value.length > 0)
-      .join("\n") ?? "";
-
-    return {
-      text: structuredText,
-      timedLines: [],
+      if (textCandidates[0]) {
+        fallbackTexts.push(textCandidates[0]);
+      }
+      return null;
     };
+
+    if (songId) {
+      try {
+        const bySongResponse = await this.get<LyricsApiPayload>("/rest/getLyricsBySongId.view", { id: songId });
+        const parsed = tryParsePayload(bySongResponse, "getLyricsBySongId.view");
+        if (parsed) {
+          return parsed;
+        }
+      } catch (error) {
+        console.warn(
+          `[Lyrics] getLyricsBySongId.view 调用失败，回退到 getLyrics.view: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+      }
+    }
+
+    const byMetaResponse = await this.get<LyricsApiPayload>("/rest/getLyrics.view", { artist, title });
+    const parsed = tryParsePayload(byMetaResponse, "getLyrics.view");
+    if (parsed) {
+      return parsed;
+    }
+
+    console.warn("[Lyrics] 未解析到时间轴，回退为纯文本歌词");
+    const plainText = fallbackTexts[0] ?? "";
+    return { text: plainText.replace(/\[.*?\]/g, "").trim(), timedLines: [] };
   }
 
   getCoverArtUrl(id: string, size = 512) {
-    const cacheKey = `${id}|${size}`;
-    const cached = this.coverArtUrlCache.get(cacheKey);
-    if (cached) {
-      return cached;
-    }
-
     const url = new URL(`${this.normalizedBaseUrl}/rest/getCoverArt.view`);
     this.appendAuthSearchParams(url.searchParams);
-    url.searchParams.set("id", id);
-    url.searchParams.set("size", String(size));
-    const resolved = url.toString();
-    this.coverArtUrlCache.set(cacheKey, resolved);
-    return resolved;
+    url.searchParams.set("id", id); url.searchParams.set("size", String(size));
+    return url.toString();
   }
 
   getStreamUrl(id: string, maxBitrate = 0) {
-    const cacheKey = `${id}|${maxBitrate}`;
-    const cached = this.streamUrlCache.get(cacheKey);
-    if (cached) {
-      return cached;
-    }
-
     const url = new URL(`${this.normalizedBaseUrl}/rest/stream.view`);
     this.appendAuthSearchParams(url.searchParams);
-    url.searchParams.set("id", id);
-    // 开发文档要求 FLAC 零转码：显式 maxBitrate=0
-    url.searchParams.set("maxBitrate", String(maxBitrate));
-    const resolved = url.toString();
-    this.streamUrlCache.set(cacheKey, resolved);
-    return resolved;
+    url.searchParams.set("id", id); url.searchParams.set("maxBitrate", String(maxBitrate));
+    return url.toString();
   }
 
-  private async get<T extends Record<string, unknown>>(
-    path: string,
-    params: Record<string, string | number | boolean | undefined> = {},
-  ) {
-    const response = await this.http.get<SubsonicResponseEnvelope<T>>(path, {
-      params: {
-        ...this.authParams,
-        ...params,
-      },
-    });
-
+  private async get<T extends Record<string, unknown>>(path: string, params: Record<string, any> = {}) {
+    const response = await this.http.get<SubsonicResponseEnvelope<T>>(path, { params: { ...this.authParams, ...params } });
     const payload = response.data["subsonic-response"] as SubsonicResponsePayload<T>;
-
-    if (payload.status === "failed") {
-      const message = payload.error?.message ?? "Subsonic request failed";
-      const error = new Error(message) as SubsonicError;
-      error.code = payload.error?.code;
-      throw error;
-    }
-
+    if (payload.status === "failed") throw new Error(payload.error?.message || "Subsonic request failed");
     return payload;
   }
 
   private createAuthParams(): AuthParams {
     const salt = this.createSalt(12);
     const token = SparkMD5.hash(`${this.password}${salt}`);
-
-    return {
-      u: this.username,
-      t: token,
-      s: salt,
-      v: this.apiVersion,
-      c: this.clientName,
-      f: "json",
-    };
+    return { u: this.username, t: token, s: salt, v: this.apiVersion, c: this.clientName, f: "json" };
   }
 
   private appendAuthSearchParams(searchParams: URLSearchParams) {
     const auth = this.authParams;
-    searchParams.set("u", auth.u);
-    searchParams.set("t", auth.t);
-    searchParams.set("s", auth.s);
-    searchParams.set("v", auth.v);
-    searchParams.set("c", auth.c);
-    searchParams.set("f", auth.f);
+    searchParams.set("u", auth.u); searchParams.set("t", auth.t); searchParams.set("s", auth.s);
+    searchParams.set("v", auth.v); searchParams.set("c", auth.c); searchParams.set("f", auth.f);
   }
 
   private createSalt(length: number) {
     const alphabet = "abcdefghijklmnopqrstuvwxyz0123456789";
     const randomValues = new Uint8Array(length);
     crypto.getRandomValues(randomValues);
-
     return Array.from(randomValues, (value) => alphabet[value % alphabet.length]).join("");
   }
 }

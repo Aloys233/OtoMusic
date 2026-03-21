@@ -14,7 +14,6 @@ function supportsMediaMetadata() {
 export function useMediaSession() {
   const currentTrack = usePlayerStore((state) => state.currentTrack);
   const isPlaying = usePlayerStore((state) => state.isPlaying);
-  const progress = usePlayerStore((state) => state.progress);
   const playNext = usePlayerStore((state) => state.playNext);
   const playPrevious = usePlayerStore((state) => state.playPrevious);
   const setPlaying = usePlayerStore((state) => state.setPlaying);
@@ -149,19 +148,38 @@ export function useMediaSession() {
       return;
     }
 
-    const duration = currentTrack?.duration ?? 0;
-    if (!Number.isFinite(duration) || duration <= 0) {
-      return;
-    }
+    const syncPositionState = () => {
+      const { currentTrack: activeTrack, progress } = usePlayerStore.getState();
+      const duration = activeTrack?.duration ?? 0;
+      if (!Number.isFinite(duration) || duration <= 0) {
+        return;
+      }
 
-    try {
-      navigator.mediaSession.setPositionState({
-        duration,
-        position: Math.min(progress, duration),
-        playbackRate: 1,
-      });
-    } catch {
-      // ignore unsupported platform
-    }
-  }, [currentTrack?.duration, progress]);
+      try {
+        navigator.mediaSession.setPositionState({
+          duration,
+          position: Math.min(progress, duration),
+          playbackRate: 1,
+        });
+      } catch {
+        // ignore unsupported platform
+      }
+    };
+
+    syncPositionState();
+    const unsubscribe = usePlayerStore.subscribe((state, previousState) => {
+      if (
+        state.progress === previousState.progress &&
+        state.currentTrack?.duration === previousState.currentTrack?.duration
+      ) {
+        return;
+      }
+
+      syncPositionState();
+    });
+
+    return () => {
+      unsubscribe();
+    };
+  }, []);
 }
