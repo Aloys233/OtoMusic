@@ -3,7 +3,10 @@
   "private": true,
   "version": "0.0.4",
   "description": "OtoMusic desktop player for Navidrome/Subsonic libraries.",
-  "author": "OtoMusic",
+  "author": {
+    "name": "Aloys23",
+    "email": "aloys233@gmail.com"
+  },
   "type": "module",
   "packageManager": "pnpm@10.5.2",
   "main": "dist-electron/main.js",
@@ -21,7 +24,8 @@
     ],
     "asar": true,
     "linux": {
-      "category": "AudioVideo"
+      "category": "AudioVideo",
+      "maintainer": "Aloys23 <aloys233@gmail.com>"
     }
   },
   "scripts": {
