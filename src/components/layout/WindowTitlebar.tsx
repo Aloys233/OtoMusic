@@ -40,10 +40,10 @@ export function WindowTitlebar({
   const [searchFocused, setSearchFocused] = useState(false);
   const isDesktopRuntime = isElectronRuntime();
   const dragRegionStyle: CSSProperties | undefined = isDesktopRuntime
-    ? { WebkitAppRegion: "drag" as CSSProperties["WebkitAppRegion"] }
+    ? { WebkitAppRegion: "drag" }
     : undefined;
   const noDragRegionStyle: CSSProperties | undefined = isDesktopRuntime
-    ? { WebkitAppRegion: "no-drag" as CSSProperties["WebkitAppRegion"] }
+    ? { WebkitAppRegion: "no-drag" }
     : undefined;
 
   const normalizedSearchKeyword = searchKeyword.trim();

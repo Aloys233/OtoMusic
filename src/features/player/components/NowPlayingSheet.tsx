@@ -40,7 +40,7 @@ export function NowPlayingSheet({
   onSelectTrack,
 }: NowPlayingSheetProps) {
   const noDragRegionStyle: CSSProperties = {
-    WebkitAppRegion: "no-drag" as CSSProperties["WebkitAppRegion"],
+    WebkitAppRegion: "no-drag",
   };
   const hasLyrics = lyrics.text.trim().length > 0;
   const [queueOpen, setQueueOpen] = useState(false);
