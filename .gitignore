@@ -11,6 +11,8 @@ yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
 package-lock.json
+
+release
 # pnpm-lock.yaml # 根据习惯通常建议保留 lock 文件，除非您特别要求忽略
 
 # Environment Variables
