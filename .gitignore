@@ -1,0 +1,41 @@
+# Node.js
+node_modules/
+dist/
+dist-ssr/
+*.local
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+package-lock.json
+# pnpm-lock.yaml # 根据习惯通常建议保留 lock 文件，除非您特别要求忽略
+
+# Rust / Tauri
+src-tauri/target/
+src-tauri/gen/
+
+# Environment Variables
+.env
+.env.local
+.env.*.local
+!.env.example
+
+# IDEs
+.vscode/
+!.vscode/extensions.json
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# OS Files
+.DS_Store
+Thumbs.db
+
+# TypeScript
+*.tsbuildinfo
+
+# Temporary
+/home/luodh/.gemini/tmp/
