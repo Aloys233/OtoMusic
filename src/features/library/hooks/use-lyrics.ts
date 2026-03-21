@@ -15,7 +15,7 @@ export function useLyrics(
 ) {
   return useQuery<LyricsData>({
     queryKey: ["library", "lyrics", target?.songId, target?.artist, target?.title, sessionKey],
-    queryFn: async () => {
+    queryFn: async ({ signal }) => {
       if (!client || !target) {
         return {
           text: "",
@@ -23,7 +23,7 @@ export function useLyrics(
         };
       }
 
-      return client.getLyrics(target.artist, target.title, target.songId);
+      return client.getLyrics(target.artist, target.title, target.songId, { signal });
     },
     enabled: Boolean(client) && Boolean(target),
     staleTime: 5 * 60_000,

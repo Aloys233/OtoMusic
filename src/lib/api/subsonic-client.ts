@@ -52,6 +52,10 @@ type AuthParams = {
   f: "json";
 };
 
+type RequestOptions = {
+  signal?: AbortSignal;
+};
+
 const DEFAULT_API_VERSION = "1.16.1";
 const DEFAULT_CLIENT_NAME = "OtoMusic";
 
@@ -371,22 +375,29 @@ export class SubsonicClient {
     this.http = axios.create({ baseURL: this.normalizedBaseUrl, timeout: config.timeoutMs ?? 12_000 });
   }
 
-  async ping() {
-    await this.get<{}>("/rest/ping.view");
+  async ping(options: RequestOptions = {}) {
+    await this.get<{}>("/rest/ping.view", {}, options);
   }
 
-  async getAlbumList2(type: AlbumListType = "newest", size = 40, offset = 0) {
+  async getAlbumList2(
+    type: AlbumListType = "newest",
+    size = 40,
+    offset = 0,
+    options: RequestOptions = {},
+  ) {
     const response = await this.get<{ albumList2?: { album?: SubsonicAlbum[] } }>(
       "/rest/getAlbumList2.view",
       { type, size, offset },
+      options,
     );
     return response.albumList2?.album ?? [];
   }
 
-  async getAlbum(id: string) {
+  async getAlbum(id: string, options: RequestOptions = {}) {
     const response = await this.get<{ album?: SubsonicAlbum & { song?: SubsonicSong[] } }>(
       "/rest/getAlbum.view",
       { id },
+      options,
     );
     if (!response.album) {
       const error = new Error(`Album not found: ${id}`) as SubsonicError;
@@ -396,14 +407,24 @@ export class SubsonicClient {
     return { ...response.album, song: response.album.song ?? [] };
   }
 
-  async search3(query: string, songCount = 20, albumCount = 20) {
+  async search3(
+    query: string,
+    songCount = 20,
+    albumCount = 20,
+    options: RequestOptions = {},
+  ) {
     const response = await this.get<{
       searchResult3?: { album?: SubsonicAlbum[]; song?: SubsonicSong[] };
-    }>("/rest/search3.view", { query, songCount, albumCount, artistCount: 0 });
+    }>("/rest/search3.view", { query, songCount, albumCount, artistCount: 0 }, options);
     return { albums: response.searchResult3?.album ?? [], songs: response.searchResult3?.song ?? [] };
   }
 
-  async getLyrics(artist: string, title: string, songId?: string): Promise<LyricsData> {
+  async getLyrics(
+    artist: string,
+    title: string,
+    songId?: string,
+    options: RequestOptions = {},
+  ): Promise<LyricsData> {
     console.log(`[Lyrics] 正在获取歌词: ${artist} - ${title}${songId ? ` (songId=${songId})` : ""}`);
     const fallbackTexts: string[] = [];
 
@@ -440,7 +461,11 @@ export class SubsonicClient {
 
     if (songId) {
       try {
-        const bySongResponse = await this.get<LyricsApiPayload>("/rest/getLyricsBySongId.view", { id: songId });
+        const bySongResponse = await this.get<LyricsApiPayload>(
+          "/rest/getLyricsBySongId.view",
+          { id: songId },
+          options,
+        );
         const parsed = tryParsePayload(bySongResponse, "getLyricsBySongId.view");
         if (parsed) {
           return parsed;
@@ -454,7 +479,11 @@ export class SubsonicClient {
       }
     }
 
-    const byMetaResponse = await this.get<LyricsApiPayload>("/rest/getLyrics.view", { artist, title });
+    const byMetaResponse = await this.get<LyricsApiPayload>(
+      "/rest/getLyrics.view",
+      { artist, title },
+      options,
+    );
     const parsed = tryParsePayload(byMetaResponse, "getLyrics.view");
     if (parsed) {
       return parsed;
@@ -479,8 +508,15 @@ export class SubsonicClient {
     return url.toString();
   }
 
-  private async get<T extends Record<string, unknown>>(path: string, params: Record<string, any> = {}) {
-    const response = await this.http.get<SubsonicResponseEnvelope<T>>(path, { params: { ...this.authParams, ...params } });
+  private async get<T extends Record<string, unknown>>(
+    path: string,
+    params: Record<string, unknown> = {},
+    options: RequestOptions = {},
+  ) {
+    const response = await this.http.get<SubsonicResponseEnvelope<T>>(path, {
+      params: { ...this.authParams, ...params },
+      signal: options.signal,
+    });
     const payload = response.data["subsonic-response"] as SubsonicResponsePayload<T>;
     if (payload.status === "failed") throw new Error(payload.error?.message || "Subsonic request failed");
     return payload;

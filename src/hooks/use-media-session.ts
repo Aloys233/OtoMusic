@@ -11,6 +11,17 @@ function supportsMediaMetadata() {
   return typeof MediaMetadata !== "undefined";
 }
 
+function isLinuxDesktop() {
+  if (typeof navigator === "undefined") {
+    return false;
+  }
+
+  const userAgent = navigator.userAgent.toLowerCase();
+  return userAgent.includes("linux") && !userAgent.includes("android");
+}
+
+const POSITION_SYNC_INTERVAL_MS = 1_000;
+
 export function useMediaSession() {
   const currentTrack = usePlayerStore((state) => state.currentTrack);
   const isPlaying = usePlayerStore((state) => state.isPlaying);
@@ -148,6 +159,16 @@ export function useMediaSession() {
       return;
     }
 
+    // WebKitGTK on some Linux desktop stacks is unstable with frequent position updates.
+    if (isLinuxDesktop()) {
+      return;
+    }
+
+    let lastSyncedAt = 0;
+    let lastTrackId: string | null = null;
+    let lastDuration = -1;
+    let lastSecond = -1;
+
     const syncPositionState = () => {
       const { currentTrack: activeTrack, progress } = usePlayerStore.getState();
       const duration = activeTrack?.duration ?? 0;
@@ -155,12 +176,30 @@ export function useMediaSession() {
         return;
       }
 
+      const now = Date.now();
+      const trackId = activeTrack?.id ?? null;
+      const position = Math.min(progress, duration);
+      const second = Math.floor(position);
+
+      const trackChanged = trackId !== lastTrackId;
+      const durationChanged = duration !== lastDuration;
+      const secondChanged = second !== lastSecond;
+      const intervalElapsed = now - lastSyncedAt >= POSITION_SYNC_INTERVAL_MS;
+
+      if (!trackChanged && !durationChanged && (!secondChanged || !intervalElapsed)) {
+        return;
+      }
+
       try {
         navigator.mediaSession.setPositionState({
           duration,
-          position: Math.min(progress, duration),
+          position,
           playbackRate: 1,
         });
+        lastTrackId = trackId;
+        lastDuration = duration;
+        lastSecond = second;
+        lastSyncedAt = now;
       } catch {
         // ignore unsupported platform
       }
@@ -169,6 +208,7 @@ export function useMediaSession() {
     syncPositionState();
     const unsubscribe = usePlayerStore.subscribe((state, previousState) => {
       if (
+        state.currentTrack?.id === previousState.currentTrack?.id &&
         state.progress === previousState.progress &&
         state.currentTrack?.duration === previousState.currentTrack?.duration
       ) {

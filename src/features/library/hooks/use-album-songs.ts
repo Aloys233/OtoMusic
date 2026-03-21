@@ -9,12 +9,12 @@ export function useAlbumSongs(
 ) {
   return useQuery({
     queryKey: ["library", "album", albumId, "songs", sessionKey],
-    queryFn: async () => {
+    queryFn: async ({ signal }) => {
       if (!client || !albumId) {
         return [];
       }
 
-      const album = await client.getAlbum(albumId);
+      const album = await client.getAlbum(albumId, { signal });
       return album.song ?? [];
     },
     enabled: Boolean(client) && Boolean(albumId),

@@ -126,6 +126,7 @@ export default function App() {
   const [isNowPlayingSheetOpen, setNowPlayingSheetOpen] = useState(false);
   const [isRefreshingLibrary, setRefreshingLibrary] = useState(false);
   const [searchInput, setSearchInput] = useState("");
+  const [debouncedSearchInput, setDebouncedSearchInput] = useState("");
   const [navHistory, setNavHistory] = useState<{
     stack: LibraryNavSection[];
     index: number;
@@ -149,6 +150,16 @@ export default function App() {
       window.removeEventListener("resize", onResize);
     };
   }, []);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      setDebouncedSearchInput(searchInput);
+    }, 250);
+
+    return () => {
+      window.clearTimeout(timer);
+    };
+  }, [searchInput]);
 
   const client = useMemo(() => {
     if (!isAuthenticated || !session) {
@@ -177,6 +188,7 @@ export default function App() {
   } = useAlbumSongs(client, sessionKey, selectedAlbumId);
   const normalizedSearchKeyword = searchKeyword.trim();
   const normalizedSearchInput = searchInput.trim();
+  const normalizedDebouncedSearchInput = debouncedSearchInput.trim();
   const {
     data: globalSearchData = { albums: [], songs: [] },
     isLoading: globalSearchLoading,
@@ -185,7 +197,7 @@ export default function App() {
   } = useGlobalSearch(client, sessionKey, normalizedSearchKeyword);
   const {
     data: suggestionSearchData = { albums: [], songs: [] },
-  } = useGlobalSearch(client, sessionKey, normalizedSearchInput);
+  } = useGlobalSearch(client, sessionKey, normalizedDebouncedSearchInput);
 
   const albumCards = useMemo(() => albumData.map(toCardItem), [albumData]);
 
@@ -247,6 +259,7 @@ export default function App() {
 
     setSelectedAlbumId(null);
     setSearchInput("");
+    setDebouncedSearchInput("");
     setSearchKeyword("");
     setActiveNavSection("discover");
     setNowPlayingSheetOpen(false);
@@ -262,6 +275,7 @@ export default function App() {
     setNavHistory,
     setPlaying,
     setQueue,
+    setDebouncedSearchInput,
     setSearchInput,
     setSearchKeyword,
     setSelectedAlbumId,
@@ -645,8 +659,8 @@ export default function App() {
 
   if (!isAuthenticated) {
     return (
-      <div className="relative h-screen w-full overflow-hidden bg-transparent p-2 text-slate-900 dark:text-slate-100">
-        <div className="relative flex h-full w-full items-center justify-center overflow-hidden rounded-2xl border border-slate-200/80 bg-slate-100 px-6 dark:border-slate-800/80 dark:bg-slate-950">
+      <div className="relative h-screen w-full overflow-hidden bg-slate-100 text-slate-900 dark:bg-slate-950 dark:text-slate-100">
+        <div className="relative flex h-full w-full items-center justify-center overflow-hidden px-6">
           <WindowTitlebar />
           <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top_right,rgba(16,185,129,0.14),transparent_45%),radial-gradient(circle_at_bottom_left,rgba(59,130,246,0.12),transparent_42%)]" />
 
@@ -684,8 +698,8 @@ export default function App() {
   }
 
   return (
-    <div className="relative h-screen w-full overflow-hidden bg-transparent p-2 text-slate-900 dark:text-slate-100">
-      <div className="relative h-full w-full overflow-hidden rounded-2xl border border-slate-200/80 bg-slate-100 dark:border-slate-800/80 dark:bg-slate-950">
+    <div className="relative h-screen w-full overflow-hidden bg-slate-100 text-slate-900 dark:bg-slate-950 dark:text-slate-100">
+      <div className="relative h-full w-full overflow-hidden">
         <WindowTitlebar
           isAuthenticated
           searchKeyword={searchInput}

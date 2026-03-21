@@ -11,14 +11,15 @@ export function useGlobalSearch(
 
   return useQuery({
     queryKey: ["library", "search3", normalizedKeyword, sessionKey],
-    queryFn: async () => {
+    queryFn: async ({ signal }) => {
       if (!client || !normalizedKeyword) {
         return { albums: [], songs: [] };
       }
 
-      return client.search3(normalizedKeyword, 80, 40);
+      return client.search3(normalizedKeyword, 80, 40, { signal });
     },
     enabled: Boolean(client) && normalizedKeyword.length > 0,
     staleTime: 30_000,
+    retry: false,
   });
 }

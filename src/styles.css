@@ -5,23 +5,25 @@
 :root {
   --radius: 0.9rem;
   color-scheme: light;
+  --window-bg: #f1f5f9;
 }
 
 :root.dark {
   color-scheme: dark;
+  --window-bg: #020617;
 }
 
 html,
 body,
 #root {
   height: 100%;
-  background: transparent;
+  background: var(--window-bg);
 }
 
 body {
   margin: 0;
   font-family: "SF Pro Text", "PingFang SC", "Microsoft YaHei", sans-serif;
-  background: transparent;
+  background: var(--window-bg);
   overflow: hidden;
 }
 
