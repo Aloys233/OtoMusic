@@ -66,10 +66,11 @@ jobs:
           elif [ "${{ matrix.os_name }}" = "macos" ]; then
             cp src-tauri/target/release/bundle/dmg/*.dmg artifacts/otomusic-macos-universal.dmg || true
           elif [ "${{ matrix.os_name }}" = "linux" ]; then
+            ls -R src-tauri/target/release/ || true
             cp src-tauri/target/release/bundle/deb/*.deb artifacts/otomusic-linux-amd64.deb || true
             cp src-tauri/target/release/bundle/rpm/*.rpm artifacts/otomusic-linux-x86_64.rpm || true
             cp src-tauri/target/release/bundle/appimage/*.AppImage artifacts/otomusic-linux-x86_64.AppImage || true
-            tar -czf artifacts/otomusic-linux-x86_64.tar.gz -C src-tauri/target/release OtoMusic
+            tar -czf artifacts/otomusic-linux-x86_64.tar.gz -C src-tauri/target/release otomusic
           fi
 
       - name: upload release
