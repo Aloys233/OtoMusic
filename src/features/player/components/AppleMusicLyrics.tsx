@@ -15,6 +15,10 @@ type AppleMusicLyricsProps = {
   duration: number;
   isPlaying: boolean;
   immersive?: boolean;
+  fontScale?: number;
+  align?: "left" | "center";
+  showTranslatedLyrics?: boolean;
+  showRomanizedLyrics?: boolean;
   className?: string;
 };
 
@@ -25,7 +29,13 @@ type LyricGlyph = {
   key: string;
 };
 
-const WAITING_GAP_THRESHOLD_SECONDS = 3.6;
+type WaitingGapWindow = {
+  start: number;
+  end: number;
+  duration: number;
+};
+
+const WAITING_GAP_THRESHOLD_SECONDS = 3.5;
 const WAITING_GAP_START_KEY = -1;
 const AUTO_FOLLOW_RESUME_DELAY_MS = 2500;
 
@@ -94,11 +104,77 @@ function resolveLineEnd(line: TimedLyricLine) {
   return safeEnd > safeStart ? safeEnd : safeStart;
 }
 
+function resolveWaitingGapWindow(
+  gapAnchorKey: number,
+  gapDuration: number,
+  lines: TimedLyricLine[],
+  trackDuration: number,
+): WaitingGapWindow | null {
+  if (gapAnchorKey === WAITING_GAP_START_KEY) {
+    const firstLine = lines[0];
+    if (!firstLine || !Number.isFinite(firstLine.start)) {
+      return null;
+    }
+
+    const end = Math.max(0.05, firstLine.start);
+    return { start: 0, end, duration: end };
+  }
+
+  const currentLine = lines[gapAnchorKey];
+  if (!currentLine) {
+    return null;
+  }
+
+  const start = resolveLineEnd(currentLine);
+  const nextStart = lines[gapAnchorKey + 1]?.start;
+  const boundedTrackDuration = Number.isFinite(trackDuration) && trackDuration > 0
+    ? trackDuration
+    : start + gapDuration;
+  const endCandidate = Number.isFinite(nextStart) ? nextStart : boundedTrackDuration;
+  const end = Math.max(start + 0.05, endCandidate);
+  return {
+    start,
+    end,
+    duration: Math.max(0.05, end - start),
+  };
+}
+
+function hasCjkText(value: string) {
+  return /[\u3040-\u30ff\u3400-\u9fff]/.test(value);
+}
+
+function hasLatinText(value: string) {
+  return /[a-zA-Z]/.test(value);
+}
+
+function isLikelyTranslationLine(value: string) {
+  const normalized = value.trim();
+  if (!normalized) {
+    return false;
+  }
+
+  return /^(?:\[?(?:translation|translate|translated|译|翻译|译文|中文翻译)[:：\]\s])/i.test(normalized);
+}
+
+function isLikelyRomanizedLine(value: string, previousLine?: string, nextLine?: string) {
+  const normalized = value.trim();
+  if (!normalized || !hasLatinText(normalized) || hasCjkText(normalized)) {
+    return false;
+  }
+
+  const aroundHasCjk = hasCjkText(previousLine ?? "") || hasCjkText(nextLine ?? "");
+  return aroundHasCjk;
+}
+
 export function AppleMusicLyrics({
   lyrics,
   duration,
   isPlaying,
   immersive = false,
+  fontScale = 1,
+  align = "center",
+  showTranslatedLyrics = true,
+  showRomanizedLyrics = true,
   className,
 }: AppleMusicLyricsProps) {
   // 是否拥有有效的时间轴
@@ -108,21 +184,81 @@ export function AppleMusicLyrics({
 
   // 核心歌词行数据
   const lyricLines = useMemo(() => {
-    if (isTimed) {
-      return lyrics.timedLines;
+    const baseLines = (() => {
+      if (isTimed) {
+        return lyrics.timedLines;
+      }
+
+      // 如果没有时间轴，则只是简单展示纯文本行，时间设为正无穷
+      return lyrics.text
+        .split(/\r?\n/)
+        .map((line) => ({
+          text: line.trim(),
+          start: Number.POSITIVE_INFINITY,
+          end: Number.POSITIVE_INFINITY,
+          syllables: [],
+        }))
+        .filter((l) => l.text.length > 0);
+    })();
+
+    if (showTranslatedLyrics && showRomanizedLyrics) {
+      return baseLines;
     }
 
-    // 如果没有时间轴，则只是简单展示纯文本行，时间设为正无穷
-    return lyrics.text
-      .split(/\r?\n/)
-      .map((line) => ({
-        text: line.trim(),
-        start: Number.POSITIVE_INFINITY,
-        end: Number.POSITIVE_INFINITY,
-        syllables: [],
-      }))
-      .filter((l) => l.text.length > 0);
-  }, [isTimed, lyrics.text, lyrics.timedLines]);
+    const filtered = baseLines.filter((line, index) => {
+      const lineText = line.text.trim();
+      if (!lineText) {
+        return false;
+      }
+
+      if (!showTranslatedLyrics && isLikelyTranslationLine(lineText)) {
+        return false;
+      }
+
+      if (!showRomanizedLyrics) {
+        const previousLine = baseLines[index - 1]?.text;
+        const nextLine = baseLines[index + 1]?.text;
+        if (isLikelyRomanizedLine(lineText, previousLine, nextLine)) {
+          return false;
+        }
+      }
+
+      return true;
+    });
+
+    return filtered.length > 0 ? filtered : baseLines;
+  }, [isTimed, lyrics.text, lyrics.timedLines, showRomanizedLyrics, showTranslatedLyrics]);
+
+  const safeFontScale = useMemo(
+    () => (Number.isFinite(fontScale) ? Math.max(0.8, Math.min(1.6, fontScale)) : 1),
+    [fontScale],
+  );
+
+  const isLeftAligned = align === "left";
+
+  const lineTextAlignClass = isLeftAligned ? "text-left" : "text-center";
+  const lineContainerAlignClass = isLeftAligned ? "items-start" : "items-center";
+
+  const lineTypographyScaleStyle = useMemo(
+    () => (isTimed ? undefined : { fontSize: `${safeFontScale}em` }),
+    [isTimed, safeFontScale],
+  );
+
+  const lineWrapperClassName = useMemo(
+    () =>
+      cn(
+        "mx-auto flex w-full max-w-6xl flex-col",
+        lineContainerAlignClass,
+        immersive
+          ? isTimed
+            ? "space-y-6 lg:space-y-8"
+            : "space-y-3 py-10"
+          : isTimed
+            ? "space-y-4"
+            : "space-y-3 py-10",
+      ),
+    [immersive, isTimed, lineContainerAlignClass],
+  );
 
   const lineGlyphs = useMemo(
     () => lyricLines.map((line, index) => buildLineGlyphs(line, index)),
@@ -169,6 +305,7 @@ export function AppleMusicLyrics({
   const [clickPulseLineIndex, setClickPulseLineIndex] = useState(-1);
   const [centerViewportPadding, setCenterViewportPadding] = useState(0);
   const [activeWaitingGapKey, setActiveWaitingGapKey] = useState<number | null>(null);
+  const [waitingGapTick, setWaitingGapTick] = useState(0);
   const [isAutoFollowEnabled, setIsAutoFollowEnabled] = useState(true);
   const activeLineIndexRef = useRef(-1);
   const activeWaitingGapKeyRef = useRef<number | null>(null);
@@ -180,6 +317,10 @@ export function AppleMusicLyrics({
   const isProgrammaticScrollRef = useRef(false);
   const pendingClickSeekRef = useRef(false);
   const setProgress = usePlayerStore((state) => state.setProgress);
+  const waitingTimelineNow = useMemo(
+    () => audioEngine.getCurrentTime(),
+    [activeWaitingGapKey, waitingGapTick],
+  );
 
   const clearManualScrollResumeTimer = () => {
     if (manualScrollResumeTimerRef.current !== null) {
@@ -341,6 +482,20 @@ export function AppleMusicLyrics({
   }, [isTimed, lyricLines, waitingGapDurations]);
 
   useEffect(() => {
+    if (!isTimed || activeWaitingGapKey === null || !isPlaying) {
+      return;
+    }
+
+    const timer = window.setInterval(() => {
+      setWaitingGapTick((value) => (value + 1) % 1_000_000);
+    }, 85);
+
+    return () => {
+      window.clearInterval(timer);
+    };
+  }, [activeWaitingGapKey, isPlaying, isTimed]);
+
+  useEffect(() => {
     if (lyricLines.length === 0) {
       lineRefs.current = [];
       return;
@@ -470,9 +625,24 @@ export function AppleMusicLyrics({
 
   const renderWaitingDots = (gapAnchorKey: number, gapDuration: number) => {
     const isWaitingNow = activeWaitingGapKey === gapAnchorKey;
+    const waitingGapWindow = resolveWaitingGapWindow(gapAnchorKey, gapDuration, lyricLines, duration);
+    const waitingProgress = isWaitingNow && waitingGapWindow
+      ? Math.min(
+          1,
+          Math.max(0, (waitingTimelineNow - waitingGapWindow.start) / waitingGapWindow.duration),
+        )
+      : 0;
+    const remainingSeconds = isWaitingNow && waitingGapWindow
+      ? Math.max(0, waitingGapWindow.end - waitingTimelineNow)
+      : gapDuration;
+    const urgency = isWaitingNow && waitingGapWindow
+      ? Math.min(1, Math.max(0, 1 - remainingSeconds / waitingGapWindow.duration))
+      : 0;
+
+    const compactGapWeight = Math.sqrt(Math.max(0, gapDuration));
     const spacerHeight = immersive
-      ? Math.min(152, 24 + gapDuration * 11)
-      : Math.min(126, 20 + gapDuration * 9);
+      ? Math.min(72, 12 + compactGapWeight * 14)
+      : Math.min(58, 10 + compactGapWeight * 11);
 
     return (
       <motion.div
@@ -481,35 +651,43 @@ export function AppleMusicLyrics({
         className="pointer-events-none flex items-center justify-center"
         style={{ height: spacerHeight }}
         animate={{
-          opacity: isWaitingNow ? 0.95 : 0.45,
-          scale: isWaitingNow ? 1 : 0.94,
-          filter: isAutoFollowEnabled
-            ? isWaitingNow
-              ? "blur(0px)"
-              : "blur(0.5px)"
-            : "blur(0px)",
+          opacity: isWaitingNow ? 0.96 : 0,
+          scale: isWaitingNow ? 1 : 0.98,
+          y: isWaitingNow ? 0 : 6,
+          filter: isWaitingNow ? "blur(0px)" : "blur(1px)",
         }}
-        transition={{ duration: 0.3, ease: [0.25, 1, 0.5, 1] }}
+        transition={{ duration: 0.3, ease: [0.22, 1, 0.36, 1] }}
       >
-        {[0, 1, 2].map((dotIndex) => (
-          <motion.span
-            key={`${gapAnchorKey}-dot-${dotIndex}`}
-            className={cn(
-              "mx-1 inline-block rounded-full",
-              immersive ? "h-1.5 w-1.5 bg-white/80" : "h-1.5 w-1.5 bg-slate-500/75 dark:bg-slate-300/70",
-            )}
-            animate={
-              isWaitingNow
-                ? { y: [0, -3, 0], opacity: [0.35, 1, 0.35] }
-                : { y: 0, opacity: 0.6 }
-            }
-            transition={
-              isWaitingNow
-                ? { duration: 1.1, ease: "easeInOut", repeat: Number.POSITIVE_INFINITY, delay: dotIndex * 0.14 }
-                : { duration: 0.22, ease: "easeOut" }
-            }
-          />
-        ))}
+        {[0, 1, 2].map((dotIndex) => {
+          const dotCountdownProgress = Math.min(1, Math.max(0, waitingProgress * 3 - dotIndex));
+          const dotPop = Math.sin(dotCountdownProgress * Math.PI);
+          const dotOpacity = isWaitingNow
+            ? 0.18 + dotCountdownProgress * 0.66 + dotPop * 0.16
+            : 0;
+          const dotScale = isWaitingNow
+            ? 0.86 + dotCountdownProgress * 0.3 + dotPop * (0.2 + urgency * 0.16)
+            : 0.9;
+          const dotOffsetY = isWaitingNow ? -dotPop * (2.6 + urgency * 3) : 0;
+
+          return (
+            <motion.span
+              key={`${gapAnchorKey}-dot-${dotIndex}`}
+              className={cn(
+                "mx-1.5 inline-block rounded-full",
+                immersive ? "h-2.5 w-2.5 bg-white/85" : "h-2 w-2 bg-slate-500/80 dark:bg-slate-200/80",
+              )}
+              animate={{ opacity: dotOpacity, scale: dotScale, y: dotOffsetY }}
+              transition={{ duration: 0.16, ease: [0.22, 1, 0.36, 1] }}
+              style={
+                immersive && isWaitingNow
+                  ? {
+                      boxShadow: `0 0 ${6 + urgency * 10}px rgba(255,255,255,${0.12 + dotCountdownProgress * 0.24})`,
+                    }
+                  : undefined
+              }
+            />
+          );
+        })}
       </motion.div>
     );
   };
@@ -529,16 +707,7 @@ export function AppleMusicLyrics({
       )}
     >
       <div
-        className={cn(
-          "mx-auto flex w-full max-w-6xl flex-col items-center",
-          immersive
-            ? isTimed
-              ? "space-y-6 lg:space-y-8"
-              : "space-y-3 py-10"
-            : isTimed
-              ? "space-y-4"
-              : "space-y-3 py-10",
-        )}
+        className={lineWrapperClassName}
         style={isTimed ? { paddingTop: centerViewportPadding, paddingBottom: centerViewportPadding } : undefined}
       >
         {isTimed && waitingGapDurations.has(WAITING_GAP_START_KEY)
@@ -553,9 +722,13 @@ export function AppleMusicLyrics({
           const activeScale = immersive ? 1.04 : 1.03;
           const lineDistance = activeLineIndex >= 0 ? Math.abs(lineIndex - activeLineIndex) : 0;
           const distanceLevel = Math.min(lineDistance, 8);
-          const nonActiveScale = immersive
-            ? Math.max(0.78, 1 - distanceLevel * 0.035)
-            : Math.max(0.82, 1 - distanceLevel * 0.03);
+          const nonActiveBaseScale = immersive ? 0.9 : 0.92;
+          const nonActiveMinScale = immersive ? 0.7 : 0.76;
+          const nonActiveDecay = immersive ? 0.04 : 0.035;
+          const nonActiveScale = Math.max(
+            nonActiveMinScale,
+            nonActiveBaseScale - distanceLevel * nonActiveDecay,
+          );
           const lineScale = isTimed ? (isActiveLine ? activeScale : nonActiveScale) : 1;
           const lineBlur = isTimed && isAutoFollowEnabled && !isActiveLine
             ? Math.min(immersive ? 5.4 : 4.2, distanceLevel * (immersive ? 0.9 : 0.72))
@@ -576,7 +749,9 @@ export function AppleMusicLyrics({
             ? { duration: 0.5, ease: [0.22, 1, 0.36, 1] as const }
             : { duration: 0.3, ease: [0.25, 1, 0.5, 1] as const };
           const lineClassName = cn(
-            "mx-auto w-full max-w-4xl bg-transparent p-0 text-center transition-[color,opacity,filter] duration-300 will-change-transform",
+            "w-full max-w-4xl bg-transparent p-0 transition-[color,opacity,filter] duration-300 will-change-transform",
+            isLeftAligned ? "mx-0" : "mx-auto",
+            lineTextAlignClass,
             // 沉浸模式样式
             immersive && [
               isTimed
@@ -637,6 +812,7 @@ export function AppleMusicLyrics({
               animate={lineAnimation}
               transition={lineTransition}
               whileTap={{ scale: Math.max(0.94, lineScale - 0.03) }}
+              style={lineTypographyScaleStyle}
               className={lineClassName}
             >
               {lineContent}
@@ -649,6 +825,7 @@ export function AppleMusicLyrics({
               }}
               animate={lineAnimation}
               transition={lineTransition}
+              style={lineTypographyScaleStyle}
               className={lineClassName}
             >
               {lineContent}

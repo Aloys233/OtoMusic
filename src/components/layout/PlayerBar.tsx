@@ -1,4 +1,4 @@
-import { motion } from "framer-motion";
+import { AnimatePresence, motion } from "framer-motion";
 import {
   ListMusic,
   Music4,
@@ -10,12 +10,22 @@ import {
   SkipBack,
   SkipForward,
   Volume2,
+  X,
 } from "lucide-react";
-import { type MouseEvent, useEffect, useLayoutEffect, useRef, useState } from "react";
+import {
+  type MouseEvent,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 
 import { audioEngine } from "@/lib/audio/AudioEngine";
 import { cn } from "@/lib/utils";
 import { usePlayerStore } from "@/stores/player-store";
+import { resolveMaxBitrateKbps, type ReplayGainMode, useSettingsStore } from "@/stores/settings-store";
 
 import { Button } from "../ui/button";
 import { Slider } from "../ui/slider";
@@ -25,6 +35,9 @@ type PlayerBarProps = {
   nowPlayingOpen?: boolean;
   onOpenNowPlaying?: () => void;
   onToggleNowPlaying?: () => void;
+  onArtistClick?: (artistName: string) => void;
+  onAlbumClick?: (albumId: string) => void;
+  onSelectTrack?: (trackId: string) => void;
 };
 
 type HoverSeekState = {
@@ -37,6 +50,20 @@ const repeatModeMap = {
   all: "one",
   one: "off",
 } as const;
+
+function buildReplayGainOptions(
+  track: { trackGainDb?: number; albumGainDb?: number } | undefined | null,
+  mode: ReplayGainMode,
+) {
+  if (mode === "off") {
+    return { trackGainDb: 0, albumGainDb: 0, preferAlbumGain: false };
+  }
+  return {
+    trackGainDb: track?.trackGainDb,
+    albumGainDb: track?.albumGainDb,
+    preferAlbumGain: mode === "album",
+  };
+}
 
 function formatTime(totalSeconds: number) {
   const safeSeconds = Math.max(0, Math.floor(totalSeconds));
@@ -58,11 +85,30 @@ function resolveSeekProgress(clientX: number, bounds: DOMRect, duration: number)
   };
 }
 
+function isKeyboardEventFromInteractiveElement(target: EventTarget | null) {
+  if (!(target instanceof HTMLElement)) {
+    return false;
+  }
+
+  if (target.isContentEditable) {
+    return true;
+  }
+
+  return Boolean(
+    target.closest(
+      "input, textarea, select, button, a[href], [role='button'], [contenteditable='true']",
+    ),
+  );
+}
+
 export function PlayerBar({
   className,
   nowPlayingOpen = false,
   onOpenNowPlaying,
   onToggleNowPlaying,
+  onArtistClick,
+  onAlbumClick,
+  onSelectTrack,
 }: PlayerBarProps) {
   const currentTrack = usePlayerStore((state) => state.currentTrack);
   const queue = usePlayerStore((state) => state.queue);
@@ -70,6 +116,8 @@ export function PlayerBar({
   const volume = usePlayerStore((state) => state.volume);
   const repeatMode = usePlayerStore((state) => state.repeatMode);
   const shuffle = usePlayerStore((state) => state.shuffle);
+  const streamQuality = useSettingsStore((state) => state.streamQuality);
+  const replayGainMode = useSettingsStore((state) => state.replayGainMode);
 
   const setVolume = usePlayerStore((state) => state.setVolume);
   const setProgress = usePlayerStore((state) => state.setProgress);
@@ -80,6 +128,7 @@ export function PlayerBar({
   const playPrevious = usePlayerStore((state) => state.playPrevious);
 
   const [hoverSeek, setHoverSeek] = useState<HoverSeekState | null>(null);
+  const [queueOpen, setQueueOpen] = useState(false);
 
   // Refs for direct DOM progress updates — avoids React re-renders during playback
   const fillRef = useRef<HTMLSpanElement>(null);
@@ -88,24 +137,33 @@ export function PlayerBar({
 
   const fallbackDuration = 225;
   const duration = Math.max(1, currentTrack?.duration ?? fallbackDuration);
+  const effectiveStreamUrl = useMemo(() => {
+    if (!currentTrack?.streamUrl) {
+      return "";
+    }
+
+    try {
+      const url = new URL(currentTrack.streamUrl);
+      url.searchParams.set("maxBitrate", String(resolveMaxBitrateKbps(streamQuality)));
+      return url.toString();
+    } catch {
+      return currentTrack.streamUrl;
+    }
+  }, [currentTrack?.streamUrl, streamQuality]);
 
   useEffect(() => {
     audioEngine.setVolume(volume);
   }, [volume]);
 
   useEffect(() => {
-    if (!isPlaying || !currentTrack?.streamUrl) {
+    if (!isPlaying || !effectiveStreamUrl) {
       return;
     }
 
     let canceled = false;
 
     void audioEngine
-      .playStream(currentTrack.streamUrl, {
-        trackGainDb: currentTrack.trackGainDb,
-        albumGainDb: currentTrack.albumGainDb,
-        preferAlbumGain: false,
-      })
+      .playStream(effectiveStreamUrl, buildReplayGainOptions(currentTrack, replayGainMode))
       .catch((error) => {
         if (canceled) {
           return;
@@ -119,10 +177,11 @@ export function PlayerBar({
     };
   }, [
     currentTrack?.id,
-    currentTrack?.streamUrl,
     currentTrack?.trackGainDb,
     currentTrack?.albumGainDb,
+    effectiveStreamUrl,
     isPlaying,
+    replayGainMode,
     setPlaying,
   ]);
 
@@ -175,13 +234,9 @@ export function PlayerBar({
     void audioEngine.onEnded(() => {
       setProgress(0);
 
-      if (repeatMode === "one" && currentTrack?.streamUrl) {
+      if (repeatMode === "one" && effectiveStreamUrl) {
         void audioEngine
-          .playStream(currentTrack.streamUrl, {
-            trackGainDb: currentTrack.trackGainDb,
-            albumGainDb: currentTrack.albumGainDb,
-            preferAlbumGain: false,
-          })
+          .playStream(effectiveStreamUrl, buildReplayGainOptions(currentTrack, replayGainMode))
           .then(() => {
             setPlaying(true);
           })
@@ -219,17 +274,18 @@ export function PlayerBar({
     };
   }, [
     currentTrack?.albumGainDb,
-    currentTrack?.streamUrl,
     currentTrack?.trackGainDb,
+    effectiveStreamUrl,
     playNext,
+    replayGainMode,
     repeatMode,
     setPlaying,
     setProgress,
     queue.length,
   ]);
 
-  const handleTogglePlay = async () => {
-    if (!currentTrack?.streamUrl) {
+  const handleTogglePlay = useCallback(async () => {
+    if (!effectiveStreamUrl) {
       return;
     }
 
@@ -245,7 +301,35 @@ export function PlayerBar({
       console.error("toggle play failed", error);
       setPlaying(false);
     }
-  };
+  }, [effectiveStreamUrl, isPlaying, setPlaying]);
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.defaultPrevented || event.repeat || event.isComposing) {
+        return;
+      }
+
+      if (event.code !== "Space" && event.key !== " ") {
+        return;
+      }
+
+      if (event.metaKey || event.ctrlKey || event.altKey || event.shiftKey) {
+        return;
+      }
+
+      if (isKeyboardEventFromInteractiveElement(event.target)) {
+        return;
+      }
+
+      event.preventDefault();
+      void handleTogglePlay();
+    };
+
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+    };
+  }, [handleTogglePlay]);
 
   const handleVolumeChange = (value: number[]) => {
     const nextVolume = (value[0] ?? 75) / 100;
@@ -253,7 +337,7 @@ export function PlayerBar({
   };
 
   const handleProgressBarSeek = (event: MouseEvent<HTMLButtonElement>) => {
-    if (!currentTrack?.streamUrl) {
+    if (!effectiveStreamUrl) {
       return;
     }
 
@@ -305,8 +389,130 @@ export function PlayerBar({
 
   const trackTitle = currentTrack?.title ?? "FLAC Placeholder Track";
   const trackArtist = currentTrack?.artist ?? "Unknown Artist";
+  const canOpenArtistDetail = Boolean(currentTrack?.artist?.trim()) && Boolean(onArtistClick);
+  const canOpenAlbumDetail = Boolean(currentTrack?.albumId) && Boolean(onAlbumClick);
+
+  const handleArtistClick = (event: MouseEvent<HTMLButtonElement>) => {
+    event.stopPropagation();
+    const artistName = currentTrack?.artist?.trim();
+    if (!artistName || !onArtistClick) {
+      return;
+    }
+
+    onArtistClick(artistName);
+  };
+
+  const handleAlbumClick = (event: MouseEvent<HTMLButtonElement>) => {
+    event.stopPropagation();
+    const albumId = currentTrack?.albumId;
+    if (!albumId || !onAlbumClick) {
+      return;
+    }
+
+    onAlbumClick(albumId);
+  };
 
   return (
+    <>
+      {/* Queue panel */}
+      <AnimatePresence>
+        {queueOpen && currentTrack ? (
+          <motion.div
+            key="queue-overlay"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.18 }}
+            className="absolute inset-0 bottom-0 z-30"
+            onClick={() => setQueueOpen(false)}
+          >
+            <motion.aside
+              initial={{ y: 20, opacity: 0 }}
+              animate={{ y: 0, opacity: 1 }}
+              exit={{ y: 20, opacity: 0 }}
+              transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
+              onClick={(e) => e.stopPropagation()}
+              className="absolute bottom-[88px] right-3 z-30 flex max-h-[min(420px,60vh)] w-[340px] flex-col overflow-hidden rounded-xl border border-slate-200/80 bg-white/95 shadow-[0_-8px_32px_rgba(0,0,0,0.12)] backdrop-blur-xl dark:border-slate-700/70 dark:bg-slate-900/95 dark:shadow-[0_-8px_32px_rgba(0,0,0,0.4)] sm:right-4 sm:w-[380px]"
+            >
+              <div className="flex items-center justify-between border-b border-slate-200/60 px-4 py-3 dark:border-slate-700/60">
+                <h3 className="text-sm font-semibold">播放队列</h3>
+                <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-500 dark:bg-slate-800 dark:text-slate-400">
+                  {queue.length} 首
+                </span>
+              </div>
+              <div className="min-h-0 flex-1 overflow-y-auto scrollbar-thin">
+                {queue.length === 0 ? (
+                  <div className="flex h-24 items-center justify-center text-sm text-slate-400 dark:text-slate-500">
+                    队列为空
+                  </div>
+                ) : (
+                  <div className="p-1.5">
+                    {queue.map((track, index) => {
+                      const active = track.id === currentTrack.id;
+                      return (
+                        <button
+                          key={`${track.id}-${index}`}
+                          type="button"
+                          onClick={() => {
+                            onSelectTrack?.(track.id);
+                          }}
+                          className={cn(
+                            "flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left transition-colors",
+                            active
+                              ? "bg-[var(--accent-soft)] text-[var(--accent-text)] dark:text-emerald-400"
+                              : "text-slate-700 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800",
+                          )}
+                        >
+                          <div className="flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-md bg-slate-100 dark:bg-slate-800">
+                            {track.coverUrl ? (
+                              <img
+                                src={track.coverUrl}
+                                alt=""
+                                className="h-full w-full object-cover"
+                              />
+                            ) : (
+                              <Music4 className="h-4 w-4 text-slate-400 dark:text-slate-500" />
+                            )}
+                          </div>
+                          <div className="min-w-0 flex-1">
+                            <p className="truncate text-sm font-medium">{track.title}</p>
+                            {onArtistClick && track.artist?.trim() ? (
+                              <button
+                                type="button"
+                                onClick={(e) => { e.stopPropagation(); onArtistClick(track.artist.trim()); }}
+                                className={cn(
+                                  "truncate text-xs transition-colors hover:text-[var(--accent-text)] hover:underline",
+                                  active ? "text-[var(--accent-text)]/70 dark:text-emerald-400/70" : "text-slate-500 dark:text-slate-400",
+                                )}
+                              >
+                                {track.artist}
+                              </button>
+                            ) : (
+                              <p className={cn(
+                                "truncate text-xs",
+                                active ? "text-[var(--accent-text)]/70 dark:text-emerald-400/70" : "text-slate-500 dark:text-slate-400",
+                              )}>
+                                {track.artist}
+                              </p>
+                            )}
+                          </div>
+                          <span className={cn(
+                            "shrink-0 text-xs tabular-nums",
+                            active ? "text-[var(--accent-text)]/70 dark:text-emerald-400/70" : "text-slate-400 dark:text-slate-500",
+                          )}>
+                            {formatTime(track.duration)}
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            </motion.aside>
+          </motion.div>
+        ) : null}
+      </AnimatePresence>
+
     <motion.footer
       initial={{ opacity: 0, y: 16 }}
       animate={{ opacity: 1, y: 0 }}
@@ -324,7 +530,7 @@ export function PlayerBar({
             onClick={onOpenNowPlaying ?? onToggleNowPlaying}
             disabled={!currentTrack}
             className={cn(
-              "flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden rounded-lg border border-slate-200/80 bg-slate-100 transition-colors hover:border-emerald-400/70 dark:border-slate-700/70 dark:bg-slate-900",
+              "flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden rounded-lg border border-slate-200/80 bg-slate-100 transition-colors hover:border-[var(--accent-border)] dark:border-slate-700/70 dark:bg-slate-900",
               !currentTrack && "cursor-not-allowed opacity-60 hover:border-slate-200/80 dark:hover:border-slate-700/70",
             )}
           >
@@ -339,8 +545,30 @@ export function PlayerBar({
             )}
           </button>
           <div className="min-w-0">
-            <p className="truncate text-sm font-medium">{trackTitle}</p>
-            <p className="truncate text-xs text-slate-600 dark:text-slate-300">{trackArtist}</p>
+            {canOpenAlbumDetail ? (
+              <button
+                type="button"
+                onClick={handleAlbumClick}
+                className="block w-full truncate text-left text-sm font-medium transition-colors hover:text-[var(--accent-text)] hover:underline"
+                title={`查看专辑`}
+              >
+                {trackTitle}
+              </button>
+            ) : (
+              <p className="truncate text-sm font-medium">{trackTitle}</p>
+            )}
+            {canOpenArtistDetail ? (
+              <button
+                type="button"
+                onClick={handleArtistClick}
+                className="block w-full truncate text-left text-xs text-slate-600 transition-colors hover:text-[var(--accent-text)] dark:text-slate-300 dark:hover:text-[var(--accent-text)]"
+                title={`查看 ${trackArtist} 详情`}
+              >
+                {trackArtist}
+              </button>
+            ) : (
+              <p className="truncate text-xs text-slate-600 dark:text-slate-300">{trackArtist}</p>
+            )}
           </div>
         </div>
 
@@ -371,7 +599,7 @@ export function PlayerBar({
               onClick={() => {
                 void handleTogglePlay();
               }}
-              disabled={!currentTrack?.streamUrl}
+              disabled={!effectiveStreamUrl}
               className="h-11 w-11 rounded-full"
             >
               {isPlaying ? <Pause className="h-4.5 w-4.5" /> : <Play className="h-4.5 w-4.5" />}
@@ -404,7 +632,7 @@ export function PlayerBar({
             <button
               type="button"
               aria-label="seek-progress"
-              disabled={!currentTrack?.streamUrl}
+              disabled={!effectiveStreamUrl}
               onClick={handleProgressBarSeek}
               onMouseMove={handleProgressHover}
               onMouseLeave={() => setHoverSeek(null)}
@@ -413,11 +641,11 @@ export function PlayerBar({
               <span className="absolute inset-x-0 top-1/2 h-1 -translate-y-1/2 rounded-full bg-slate-300/80 dark:bg-slate-700/85" />
               <span
                 ref={fillRef}
-                className="absolute left-0 top-1/2 h-1 -translate-y-1/2 rounded-full bg-red-500"
+                className="absolute left-0 top-1/2 h-1 -translate-y-1/2 rounded-full bg-[var(--accent-solid)]"
               />
               <span
                 ref={thumbRef}
-                className="absolute top-1/2 h-3 w-3 -translate-y-1/2 rounded-full border border-white bg-red-500 shadow-sm dark:border-slate-900"
+                className="absolute top-1/2 h-3 w-3 -translate-y-1/2 rounded-full border border-white bg-[var(--accent-solid)] shadow-sm dark:border-slate-900"
               />
 
               {hoverSeek ? (
@@ -448,15 +676,16 @@ export function PlayerBar({
           <Button
             size="icon"
             variant="ghost"
-            aria-label="toggle-now-playing-sheet"
-            onClick={onToggleNowPlaying}
+            aria-label="toggle-queue"
+            onClick={() => setQueueOpen((prev) => !prev)}
             disabled={!currentTrack}
-            className={cn(nowPlayingOpen && "bg-slate-200 dark:bg-slate-800")}
+            className={cn(queueOpen && "bg-slate-200 dark:bg-slate-800")}
           >
             <ListMusic className="h-4 w-4" />
           </Button>
         </div>
       </div>
     </motion.footer>
+    </>
   );
 }

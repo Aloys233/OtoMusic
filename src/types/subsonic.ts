@@ -28,6 +28,18 @@ export type SubsonicSong = {
   path?: string;
   replayGainTrackGain?: number | string;
   replayGainAlbumGain?: number | string;
+  starred?: string;
+};
+
+export type SubsonicGenre = {
+  value?: string;
+  songCount?: number;
+  albumCount?: number;
+};
+
+export type SubsonicMusicFolder = {
+  id: string;
+  name?: string;
 };
 
 export type SubsonicResponseEnvelope<T> = {

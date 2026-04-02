@@ -6,9 +6,10 @@ interface AlbumGridItemProps {
   artist: string;
   coverUrl: string | null;
   onClick: (id: string) => void;
+  onArtistClick?: (artist: string) => void;
 }
 
-export const AlbumGridItem = React.memo(({ id, title, artist, coverUrl, onClick }: AlbumGridItemProps) => {
+export const AlbumGridItem = React.memo(({ id, title, artist, coverUrl, onClick, onArtistClick }: AlbumGridItemProps) => {
   return (
     <div className="album-grid-item">
       <button
@@ -34,9 +35,21 @@ export const AlbumGridItem = React.memo(({ id, title, artist, coverUrl, onClick 
 
         <div className="px-1 min-w-0">
           <p className="truncate text-sm font-semibold leading-snug text-slate-900 dark:text-slate-100">{title}</p>
-          <p className="truncate text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-            {artist}
-          </p>
+          {onArtistClick ? (
+            <span
+              role="button"
+              tabIndex={0}
+              onClick={(e) => { e.stopPropagation(); onArtistClick(artist); }}
+              onKeyDown={(e) => { if (e.key === "Enter") { e.stopPropagation(); onArtistClick(artist); } }}
+              className="block truncate text-xs text-slate-500 dark:text-slate-400 mt-0.5 transition-colors hover:text-[var(--accent-text)] hover:underline cursor-pointer"
+            >
+              {artist}
+            </span>
+          ) : (
+            <p className="truncate text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+              {artist}
+            </p>
+          )}
         </div>
       </button>
     </div>

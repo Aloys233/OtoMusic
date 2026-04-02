@@ -1,5 +1,6 @@
 import type { SubsonicClient } from "@/lib/api/subsonic-client";
 import type { TrackInfo } from "@/stores/player-store";
+import { resolveMaxBitrateKbps, useSettingsStore } from "@/stores/settings-store";
 import type { SubsonicSong } from "@/types/subsonic";
 
 function parseGain(value: number | string | undefined) {
@@ -18,15 +19,22 @@ function parseGain(value: number | string | undefined) {
 }
 
 export function mapSongToTrackInfo(song: SubsonicSong, client: SubsonicClient): TrackInfo {
+  const streamQuality = useSettingsStore.getState().streamQuality;
+  const maxBitrate = resolveMaxBitrateKbps(streamQuality);
+
   return {
     id: song.id,
     title: song.title,
     artist: song.artist ?? "Unknown Artist",
+    album: song.album,
+    albumId: song.albumId,
     duration: song.duration ?? 0,
     coverArtId: song.coverArt,
     coverUrl: song.coverArt ? client.getCoverArtUrl(song.coverArt, 192) : undefined,
-    streamUrl: client.getStreamUrl(song.id, 0),
+    streamUrl: client.getStreamUrl(song.id, maxBitrate),
     trackGainDb: parseGain(song.replayGainTrackGain),
     albumGainDb: parseGain(song.replayGainAlbumGain),
+    bitRate: song.bitRate,
+    suffix: song.suffix,
   };
 }

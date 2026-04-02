@@ -4,6 +4,8 @@ type ReplayGainOptions = {
   preferAlbumGain?: boolean;
 };
 
+const EQ_BAND_FREQUENCIES = [31, 62, 125, 250, 500, 1000, 2000, 4000, 8000, 16000] as const;
+
 type SinkAwareAudioElement = HTMLAudioElement & {
   setSinkId?: (sinkId: string) => Promise<void>;
   sinkId?: string;
@@ -22,6 +24,8 @@ export class AudioEngine {
 
   private preampGainNode: GainNode | null = null;
 
+  private equalizerNodes: BiquadFilterNode[] = [];
+
   private masterGainNode: GainNode | null = null;
 
   private initPromise: Promise<void> | null = null;
@@ -30,7 +34,19 @@ export class AudioEngine {
 
   private preampGainDb = 0;
 
-  private readonly fadeDuration = 0.2;
+  private equalizerEnabled = false;
+
+  private equalizerBands = [...EQ_BAND_FREQUENCIES.map(() => 0)];
+
+  private gaplessEnabled = true;
+
+  private crossfadeEnabled = false;
+
+  private crossfadeDurationSec = 3;
+
+  private fadeDuration = 0.2;
+
+  private playbackRate = 1.0;
 
   private constructor() {
     // 使用 getInstance() 获取单例
@@ -48,20 +64,37 @@ export class AudioEngine {
     const nodes = this.getNodes();
 
     const isSwitchingTrack = nodes.mediaElement.src !== url;
-    if (isSwitchingTrack && !nodes.mediaElement.paused) {
-      await this.fadeOutCurrent(160);
+    const wasPlaying = !nodes.mediaElement.paused;
+    const shouldCrossfade = isSwitchingTrack && wasPlaying && this.crossfadeEnabled;
+    const shouldUseTransitionFade = isSwitchingTrack && wasPlaying && (!this.gaplessEnabled || shouldCrossfade);
+
+    if (shouldUseTransitionFade) {
+      const fadeMs = shouldCrossfade
+        ? Math.round(this.crossfadeDurationSec * 1000)
+        : 160;
+      await this.fadeOutCurrent(fadeMs);
     }
 
     if (isSwitchingTrack) {
       nodes.mediaElement.src = url;
       nodes.mediaElement.load();
-      nodes.masterGainNode.gain.setValueAtTime(0, nodes.context.currentTime);
+      if (shouldUseTransitionFade) {
+        nodes.masterGainNode.gain.setValueAtTime(0, nodes.context.currentTime);
+      } else {
+        nodes.masterGainNode.gain.setValueAtTime(this.targetVolume, nodes.context.currentTime);
+      }
     }
 
     this.applyReplayGain(replayGain);
 
     await this.resume();
     await nodes.mediaElement.play();
+    if (isSwitchingTrack && shouldUseTransitionFade) {
+      const duration = shouldCrossfade ? this.crossfadeDurationSec : this.fadeDuration;
+      this.rampMasterGain(this.targetVolume, duration);
+      return;
+    }
+
     this.rampMasterGain(this.targetVolume, this.fadeDuration);
   }
 
@@ -144,6 +177,65 @@ export class AudioEngine {
     const now = this.context.currentTime;
     this.preampGainNode.gain.cancelScheduledValues(now);
     this.preampGainNode.gain.setTargetAtTime(linearGain, now, 0.03);
+  }
+
+  setGaplessEnabled(enabled: boolean) {
+    this.gaplessEnabled = enabled;
+  }
+
+  setCrossfadeEnabled(enabled: boolean) {
+    this.crossfadeEnabled = enabled;
+  }
+
+  setCrossfadeDurationSec(seconds: number) {
+    const safeSeconds = Number.isFinite(seconds) ? Math.max(1, Math.min(10, seconds)) : 3;
+    this.crossfadeDurationSec = safeSeconds;
+  }
+
+  setFadeDuration(seconds: number) {
+    this.fadeDuration = Number.isFinite(seconds) ? Math.max(0.05, Math.min(0.5, seconds)) : 0.2;
+  }
+
+  setPlaybackRate(rate: number) {
+    const safeRate = Number.isFinite(rate) ? Math.max(0.5, Math.min(2.0, rate)) : 1.0;
+    this.playbackRate = safeRate;
+
+    if (this.mediaElement) {
+      this.mediaElement.playbackRate = safeRate;
+    }
+  }
+
+  setEqualizerEnabled(enabled: boolean) {
+    this.equalizerEnabled = enabled;
+    this.syncEqualizerGain();
+  }
+
+  setEqualizerBands(bands: number[]) {
+    if (!Array.isArray(bands) || bands.length !== EQ_BAND_FREQUENCIES.length) {
+      return;
+    }
+
+    this.equalizerBands = bands.map((gain) =>
+      Number.isFinite(gain) ? Math.max(-12, Math.min(12, gain)) : 0);
+    this.syncEqualizerGain();
+  }
+
+  setEqualizerBand(index: number, gainDb: number) {
+    if (index < 0 || index >= EQ_BAND_FREQUENCIES.length) {
+      return;
+    }
+
+    const safeGain = Number.isFinite(gainDb) ? Math.max(-12, Math.min(12, gainDb)) : 0;
+    this.equalizerBands[index] = safeGain;
+    this.syncEqualizerGain(index);
+  }
+
+  getEqualizerBands() {
+    return [...this.equalizerBands];
+  }
+
+  getEqualizerFrequencies() {
+    return [...EQ_BAND_FREQUENCIES];
   }
 
   getPreampGainDb() {
@@ -231,10 +323,21 @@ export class AudioEngine {
 
       mediaElement.preload = "auto";
       mediaElement.crossOrigin = "anonymous";
+      mediaElement.playbackRate = this.playbackRate;
 
       const sourceNode = context.createMediaElementSource(mediaElement);
       const replayGainNode = context.createGain();
       const preampGainNode = context.createGain();
+      const equalizerNodes = EQ_BAND_FREQUENCIES.map((frequency, index) => {
+        const node = context.createBiquadFilter();
+        const isLowBand = index === 0;
+        const isHighBand = index === EQ_BAND_FREQUENCIES.length - 1;
+        node.type = isLowBand ? "lowshelf" : isHighBand ? "highshelf" : "peaking";
+        node.frequency.value = frequency;
+        node.Q.value = isLowBand || isHighBand ? 0.7 : 1.05;
+        node.gain.value = 0;
+        return node;
+      });
       const masterGainNode = context.createGain();
 
       replayGainNode.gain.value = 1;
@@ -243,7 +346,15 @@ export class AudioEngine {
 
       sourceNode.connect(replayGainNode);
       replayGainNode.connect(preampGainNode);
-      preampGainNode.connect(masterGainNode);
+      if (equalizerNodes.length > 0) {
+        preampGainNode.connect(equalizerNodes[0]);
+        for (let index = 0; index < equalizerNodes.length - 1; index += 1) {
+          equalizerNodes[index]?.connect(equalizerNodes[index + 1] as BiquadFilterNode);
+        }
+        equalizerNodes[equalizerNodes.length - 1]?.connect(masterGainNode);
+      } else {
+        preampGainNode.connect(masterGainNode);
+      }
       masterGainNode.connect(context.destination);
 
       this.context = context;
@@ -251,7 +362,9 @@ export class AudioEngine {
       this.sourceNode = sourceNode;
       this.replayGainNode = replayGainNode;
       this.preampGainNode = preampGainNode;
+      this.equalizerNodes = equalizerNodes;
       this.masterGainNode = masterGainNode;
+      this.syncEqualizerGain();
     })();
 
     await this.initPromise;
@@ -275,6 +388,7 @@ export class AudioEngine {
       sourceNode: this.sourceNode,
       replayGainNode: this.replayGainNode,
       preampGainNode: this.preampGainNode,
+      equalizerNodes: this.equalizerNodes,
       masterGainNode: this.masterGainNode,
     };
   }
@@ -291,8 +405,31 @@ export class AudioEngine {
   }
 
   private async fadeOutCurrent(waitMs: number) {
-    this.rampMasterGain(0, this.fadeDuration);
+    const durationSec = Math.max(this.fadeDuration, waitMs / 1000);
+    this.rampMasterGain(0, durationSec);
     await new Promise((resolve) => setTimeout(resolve, waitMs));
+  }
+
+  private syncEqualizerGain(onlyIndex?: number) {
+    if (!this.context || this.equalizerNodes.length === 0) {
+      return;
+    }
+
+    const applyAt = this.context.currentTime;
+    const updateNode = (node: BiquadFilterNode, index: number) => {
+      const gain = this.equalizerEnabled ? this.equalizerBands[index] ?? 0 : 0;
+      node.gain.cancelScheduledValues(applyAt);
+      node.gain.setTargetAtTime(gain, applyAt, 0.035);
+    };
+
+    if (typeof onlyIndex === "number" && this.equalizerNodes[onlyIndex]) {
+      updateNode(this.equalizerNodes[onlyIndex], onlyIndex);
+      return;
+    }
+
+    this.equalizerNodes.forEach((node, index) => {
+      updateNode(node, index);
+    });
   }
 }
 

@@ -6,6 +6,12 @@
   --radius: 0.9rem;
   color-scheme: light;
   --window-bg: #f1f5f9;
+  --accent-rgb: 16 185 129;
+  --accent-solid: rgb(var(--accent-rgb));
+  --accent-soft: rgba(16, 185, 129, 0.16);
+  --accent-soft-strong: rgba(16, 185, 129, 0.28);
+  --accent-border: rgba(16, 185, 129, 0.42);
+  --accent-text: rgb(4 120 87);
 }
 
 :root.dark {
@@ -31,6 +37,9 @@ body {
 
 * {
   box-sizing: border-box;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-user-drag: none;
 }
 
 /* 主滚动容器：不要在滚动容器上加 will-change/contain，会干扰原生滚动优化 */
@@ -51,6 +60,18 @@ main {
 
 .dark .scrollbar-thin::-webkit-scrollbar-thumb {
   background: rgba(255, 255, 255, 0.15);
+}
+
+/* 完全隐藏滚动条但保留滚动能力 */
+.scrollbar-none {
+  -ms-overflow-style: none; /* IE/Edge */
+  scrollbar-width: none; /* Firefox */
+}
+
+.scrollbar-none::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+  display: none; /* Chromium/Safari */
 }
 
 /* 利用 content-visibility 让浏览器跳过屏幕外元素的渲染（Chromium 原生支持） */

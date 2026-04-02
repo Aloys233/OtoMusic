@@ -1,8 +1,14 @@
-import { app, BrowserWindow, Menu, Tray, ipcMain } from "electron";
+import { app, BrowserWindow, Menu, Tray, globalShortcut, ipcMain } from "electron";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 type TrayAction = "show" | "play-pause" | "next" | "previous";
+type GlobalShortcutConfig = {
+  enabled: boolean;
+  playPause: string;
+  nextTrack: string;
+  previousTrack: string;
+};
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -14,6 +20,29 @@ const trayIconPath = path.resolve(__dirname, "../electron/assets/icon.png");
 let mainWindow: BrowserWindow | null = null;
 let tray: Tray | null = null;
 let isQuitting = false;
+let globalShortcutConfig: GlobalShortcutConfig = {
+  enabled: true,
+  playPause: "MediaPlayPause",
+  nextTrack: "MediaNextTrack",
+  previousTrack: "MediaPreviousTrack",
+};
+
+function normalizeShortcutAccelerator(input: string) {
+  if (input.length === 0) {
+    return "";
+  }
+
+  if (/^\s+$/.test(input)) {
+    return "Space";
+  }
+
+  const trimmed = input.trim();
+  if (/^space(bar)?$/i.test(trimmed)) {
+    return "Space";
+  }
+
+  return trimmed;
+}
 
 function emitTrayAction(action: TrayAction) {
   if (!mainWindow || mainWindow.isDestroyed()) {
@@ -71,6 +100,50 @@ function setupIpc() {
     const [x, y] = mainWindow.getPosition();
     mainWindow.setPosition(x + dx, y + dy);
   });
+
+  ipcMain.on("global-shortcuts:update", (_, nextConfig: Partial<GlobalShortcutConfig>) => {
+    globalShortcutConfig = {
+      enabled: Boolean(nextConfig.enabled),
+      playPause: typeof nextConfig.playPause === "string"
+        ? normalizeShortcutAccelerator(nextConfig.playPause)
+        : "",
+      nextTrack: typeof nextConfig.nextTrack === "string"
+        ? normalizeShortcutAccelerator(nextConfig.nextTrack)
+        : "",
+      previousTrack: typeof nextConfig.previousTrack === "string"
+        ? normalizeShortcutAccelerator(nextConfig.previousTrack)
+        : "",
+    };
+    registerGlobalShortcuts();
+  });
+}
+
+function registerGlobalShortcuts() {
+  globalShortcut.unregisterAll();
+
+  if (!globalShortcutConfig.enabled) {
+    return;
+  }
+
+  const registrations: Array<{ accelerator: string; action: TrayAction }> = [
+    { accelerator: globalShortcutConfig.playPause, action: "play-pause" },
+    { accelerator: globalShortcutConfig.nextTrack, action: "next" },
+    { accelerator: globalShortcutConfig.previousTrack, action: "previous" },
+  ];
+
+  for (const registration of registrations) {
+    if (!registration.accelerator) {
+      continue;
+    }
+
+    const success = globalShortcut.register(registration.accelerator, () => {
+      emitTrayAction(registration.action);
+    });
+
+    if (!success) {
+      console.warn(`[OtoMusic] failed to register global shortcut: ${registration.accelerator}`);
+    }
+  }
 }
 
 function createTray() {
@@ -182,10 +255,15 @@ if (!gotLock) {
     isQuitting = true;
   });
 
+  app.on("will-quit", () => {
+    globalShortcut.unregisterAll();
+  });
+
   app.whenReady().then(() => {
     setupIpc();
     createMainWindow();
     createTray();
+    registerGlobalShortcuts();
 
     app.on("activate", () => {
       if (BrowserWindow.getAllWindows().length === 0) {

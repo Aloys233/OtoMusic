@@ -3,6 +3,8 @@ import SparkMD5 from "spark-md5";
 
 import type {
   SubsonicAlbum,
+  SubsonicGenre,
+  SubsonicMusicFolder,
   SubsonicResponseEnvelope,
   SubsonicSong,
 } from "@/types/subsonic";
@@ -77,6 +79,11 @@ export type LyricsData = {
   timedLines: TimedLyricLine[];
 };
 
+export type ScanStatus = {
+  scanning: boolean;
+  count: number;
+};
+
 type TimeCandidate = {
   raw: number;
   isClockFormat: boolean;
@@ -136,9 +143,9 @@ function normalizeLyricLines(lines: NormalizableLyricLine[]): TimedLyricLine[] {
     const explicitEnd = typeof line.end === "number" && Number.isFinite(line.end) ? line.end : undefined;
     const fallbackEnd = line.start + estimateLineDuration(line.text);
     const nextBound = typeof nextStart === "number" ? Math.max(line.start + 0.1, nextStart - 0.01) : undefined;
-    let end = explicitEnd ?? nextBound ?? fallbackEnd;
-    if (typeof explicitEnd === "number" && typeof nextBound === "number") {
-      end = Math.min(explicitEnd, nextBound);
+    let end = explicitEnd ?? fallbackEnd;
+    if (typeof nextBound === "number") {
+      end = Math.min(end, nextBound);
     }
     if (!Number.isFinite(end) || end <= line.start) {
       end = line.start + 0.1;
@@ -417,6 +424,58 @@ export class SubsonicClient {
       searchResult3?: { album?: SubsonicAlbum[]; song?: SubsonicSong[] };
     }>("/rest/search3.view", { query, songCount, albumCount, artistCount: 0 }, options);
     return { albums: response.searchResult3?.album ?? [], songs: response.searchResult3?.song ?? [] };
+  }
+
+  async getStarred2(options: RequestOptions = {}) {
+    const response = await this.get<{
+      starred2?: { album?: SubsonicAlbum[]; song?: SubsonicSong[] };
+    }>("/rest/getStarred2.view", {}, options);
+    return {
+      albums: response.starred2?.album ?? [],
+      songs: response.starred2?.song ?? [],
+    };
+  }
+
+  async getGenres(options: RequestOptions = {}) {
+    const response = await this.get<{ genres?: { genre?: SubsonicGenre[] } }>(
+      "/rest/getGenres.view",
+      {},
+      options,
+    );
+    return response.genres?.genre ?? [];
+  }
+
+  async getMusicFolders(options: RequestOptions = {}) {
+    const response = await this.get<{ musicFolders?: { musicFolder?: SubsonicMusicFolder[] } }>(
+      "/rest/getMusicFolders.view",
+      {},
+      options,
+    );
+    return response.musicFolders?.musicFolder ?? [];
+  }
+
+  async startScan(options: RequestOptions = {}): Promise<ScanStatus> {
+    const response = await this.get<{ scanStatus?: { scanning?: boolean; count?: number } }>(
+      "/rest/startScan.view",
+      {},
+      options,
+    );
+    return {
+      scanning: Boolean(response.scanStatus?.scanning),
+      count: response.scanStatus?.count ?? 0,
+    };
+  }
+
+  async getScanStatus(options: RequestOptions = {}): Promise<ScanStatus> {
+    const response = await this.get<{ scanStatus?: { scanning?: boolean; count?: number } }>(
+      "/rest/getScanStatus.view",
+      {},
+      options,
+    );
+    return {
+      scanning: Boolean(response.scanStatus?.scanning),
+      count: response.scanStatus?.count ?? 0,
+    };
   }
 
   async getLyrics(

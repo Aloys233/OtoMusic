@@ -6,12 +6,16 @@ export type TrackInfo = {
   id: string;
   title: string;
   artist: string;
+  album?: string;
+  albumId?: string;
   duration: number;
   streamUrl?: string;
   coverArtId?: string;
   coverUrl?: string;
   trackGainDb?: number;
   albumGainDb?: number;
+  bitRate?: number;
+  suffix?: string;
 };
 
 type PlayerState = {

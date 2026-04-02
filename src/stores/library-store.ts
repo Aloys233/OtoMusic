@@ -1,12 +1,17 @@
 import { create } from "zustand";
 
 export type LibraryNavSection =
+  | "for-you"
   | "discover"
   | "recent-added"
   | "albums"
   | "artists"
   | "songs"
+  | "loved-tracks"
+  | "genres"
+  | "folders"
   | "album-detail"
+  | "artist-detail"
   | "search"
   | "playlists";
 
@@ -22,7 +27,7 @@ type LibraryState = {
 export const useLibraryStore = create<LibraryState>((set) => ({
   selectedAlbumId: null,
   searchKeyword: "",
-  activeNavSection: "discover",
+  activeNavSection: "for-you",
   setSelectedAlbumId: (selectedAlbumId) => set({ selectedAlbumId }),
   setSearchKeyword: (searchKeyword) => set({ searchKeyword }),
   setActiveNavSection: (activeNavSection) => set({ activeNavSection }),

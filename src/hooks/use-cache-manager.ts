@@ -13,6 +13,8 @@ function formatBytes(value: number) {
 
 export function useCacheManager() {
   const [usageText, setUsageText] = useState("-");
+  const [usageBytes, setUsageBytes] = useState(0);
+  const [quotaBytes, setQuotaBytes] = useState(0);
   const [isClearing, setIsClearing] = useState(false);
 
   const refresh = useCallback(async () => {
@@ -25,6 +27,8 @@ export function useCacheManager() {
       const estimate = await navigator.storage.estimate();
       const usage = estimate.usage ?? 0;
       const quota = estimate.quota ?? 0;
+      setUsageBytes(usage);
+      setQuotaBytes(quota);
 
       if (!quota) {
         setUsageText(formatBytes(usage));
@@ -34,6 +38,8 @@ export function useCacheManager() {
       const ratio = ((usage / quota) * 100).toFixed(1);
       setUsageText(`${formatBytes(usage)} / ${formatBytes(quota)} (${ratio}%)`);
     } catch {
+      setUsageBytes(0);
+      setQuotaBytes(0);
       setUsageText("Unavailable");
     }
   }, []);
@@ -47,9 +53,7 @@ export function useCacheManager() {
         await Promise.all(keys.map((key) => caches.delete(key)));
       }
 
-      if (typeof localStorage !== "undefined") {
-        localStorage.removeItem("otomusic-theme");
-      }
+      // 本地缓存清理仅作用于 Cache Storage，避免误删账号等关键持久化数据。
     } finally {
       setIsClearing(false);
       void refresh();
@@ -62,6 +66,8 @@ export function useCacheManager() {
 
   return {
     usageText,
+    usageBytes,
+    quotaBytes,
     isClearing,
     clearCaches,
     refresh,
