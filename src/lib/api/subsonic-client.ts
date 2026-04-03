@@ -3,6 +3,7 @@ import SparkMD5 from "spark-md5";
 
 import type {
   SubsonicAlbum,
+  SubsonicArtistInfo2,
   SubsonicGenre,
   SubsonicMusicFolder,
   SubsonicResponseEnvelope,
@@ -22,6 +23,7 @@ export type AlbumListType =
 
 export type SubsonicClientConfig = {
   baseUrl: string;
+  fallbackUrls?: string[];
   username: string;
   password: string;
   clientName?: string;
@@ -364,22 +366,28 @@ function collectStructuredLyricsCandidates(payload: LyricsApiPayload): unknown[]
 export class SubsonicClient {
   private readonly http: AxiosInstance;
   private readonly normalizedBaseUrl: string;
+  private readonly fallbackUrls: string[];
+  private activeBaseUrl: string;
   private readonly username: string;
   private readonly password: string;
   private readonly apiVersion: string;
   private readonly clientName: string;
   private readonly authParams: AuthParams;
+  private readonly timeoutMs: number;
   private readonly coverArtUrlCache = new Map<string, string>();
   private readonly streamUrlCache = new Map<string, string>();
 
   constructor(config: SubsonicClientConfig) {
     this.normalizedBaseUrl = config.baseUrl.replace(/\/+$/, "");
+    this.fallbackUrls = (config.fallbackUrls ?? []).map((u) => u.replace(/\/+$/, ""));
+    this.activeBaseUrl = this.normalizedBaseUrl;
     this.username = config.username;
     this.password = config.password;
     this.apiVersion = config.apiVersion ?? DEFAULT_API_VERSION;
     this.clientName = config.clientName ?? DEFAULT_CLIENT_NAME;
+    this.timeoutMs = config.timeoutMs ?? 12_000;
     this.authParams = this.createAuthParams();
-    this.http = axios.create({ baseURL: this.normalizedBaseUrl, timeout: config.timeoutMs ?? 12_000 });
+    this.http = axios.create({ baseURL: this.activeBaseUrl, timeout: this.timeoutMs });
   }
 
   async ping(options: RequestOptions = {}) {
@@ -452,6 +460,15 @@ export class SubsonicClient {
       options,
     );
     return response.musicFolders?.musicFolder ?? [];
+  }
+
+  async getArtistInfo2(id: string, options: RequestOptions = {}) {
+    const response = await this.get<{ artistInfo2?: SubsonicArtistInfo2 }>(
+      "/rest/getArtistInfo2.view",
+      { id, count: 0 },
+      options,
+    );
+    return response.artistInfo2 ?? null;
   }
 
   async startScan(options: RequestOptions = {}): Promise<ScanStatus> {
@@ -554,17 +571,21 @@ export class SubsonicClient {
   }
 
   getCoverArtUrl(id: string, size = 512) {
-    const url = new URL(`${this.normalizedBaseUrl}/rest/getCoverArt.view`);
+    const url = new URL(`${this.activeBaseUrl}/rest/getCoverArt.view`);
     this.appendAuthSearchParams(url.searchParams);
     url.searchParams.set("id", id); url.searchParams.set("size", String(size));
     return url.toString();
   }
 
   getStreamUrl(id: string, maxBitrate = 0) {
-    const url = new URL(`${this.normalizedBaseUrl}/rest/stream.view`);
+    const url = new URL(`${this.activeBaseUrl}/rest/stream.view`);
     this.appendAuthSearchParams(url.searchParams);
     url.searchParams.set("id", id); url.searchParams.set("maxBitrate", String(maxBitrate));
     return url.toString();
+  }
+
+  getActiveBaseUrl() {
+    return this.activeBaseUrl;
   }
 
   private async get<T extends Record<string, unknown>>(
@@ -572,13 +593,55 @@ export class SubsonicClient {
     params: Record<string, unknown> = {},
     options: RequestOptions = {},
   ) {
-    const response = await this.http.get<SubsonicResponseEnvelope<T>>(path, {
+    try {
+      return await this.request<T>(this.activeBaseUrl, path, params, options);
+    } catch (error) {
+      if (!this.isNetworkError(error) || this.fallbackUrls.length === 0) throw error;
+
+      const candidates = [this.normalizedBaseUrl, ...this.fallbackUrls].filter(
+        (u) => u !== this.activeBaseUrl,
+      );
+
+      for (const url of candidates) {
+        try {
+          const result = await this.request<T>(url, path, params, options);
+          this.activeBaseUrl = url;
+          this.http.defaults.baseURL = url;
+          this.coverArtUrlCache.clear();
+          this.streamUrlCache.clear();
+          return result;
+        } catch {
+          // try next
+        }
+      }
+
+      throw error;
+    }
+  }
+
+  private async request<T extends Record<string, unknown>>(
+    baseUrl: string,
+    path: string,
+    params: Record<string, unknown>,
+    options: RequestOptions,
+  ) {
+    const response = await axios.get<SubsonicResponseEnvelope<T>>(`${baseUrl}${path}`, {
       params: { ...this.authParams, ...params },
       signal: options.signal,
+      timeout: this.timeoutMs,
     });
     const payload = response.data["subsonic-response"] as SubsonicResponsePayload<T>;
     if (payload.status === "failed") throw new Error(payload.error?.message || "Subsonic request failed");
     return payload;
+  }
+
+  private isNetworkError(error: unknown): boolean {
+    if (!error || typeof error !== "object") return false;
+    const err = error as Record<string, unknown>;
+    if (err.code === "ECONNABORTED" || err.code === "ERR_NETWORK" || err.code === "ECONNREFUSED" || err.code === "ENOTFOUND") return true;
+    if (err.message && typeof err.message === "string" && /timeout|network|ECONNREFUSED|ENOTFOUND|ERR_NETWORK/.test(err.message)) return true;
+    if (err.response === undefined && err.request !== undefined) return true;
+    return false;
   }
 
   private createAuthParams(): AuthParams {

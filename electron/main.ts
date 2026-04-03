@@ -1,4 +1,5 @@
 import { app, BrowserWindow, Menu, Tray, globalShortcut, ipcMain } from "electron";
+import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -15,7 +16,22 @@ const __dirname = path.dirname(__filename);
 const devServerUrl = process.env.VITE_DEV_SERVER_URL;
 const rendererHtmlPath = path.resolve(__dirname, "../dist/index.html");
 const preloadPath = path.resolve(__dirname, "./preload.mjs");
-const trayIconPath = path.resolve(__dirname, "../electron/assets/icon.png");
+
+function resolveTrayIconPath() {
+  const candidates = [
+    path.join(process.resourcesPath, "tray", "icon.png"),
+    path.join(process.resourcesPath, "electron", "assets", "icon.png"),
+    path.resolve(__dirname, "../electron/assets/icon.png"),
+  ];
+
+  for (const candidate of candidates) {
+    if (fs.existsSync(candidate)) {
+      return candidate;
+    }
+  }
+
+  return null;
+}
 
 let mainWindow: BrowserWindow | null = null;
 let tray: Tray | null = null;
@@ -148,6 +164,12 @@ function registerGlobalShortcuts() {
 
 function createTray() {
   try {
+    const trayIconPath = resolveTrayIconPath();
+    if (!trayIconPath) {
+      console.warn("[OtoMusic] tray icon not found, tray disabled");
+      return;
+    }
+
     tray = new Tray(trayIconPath);
     tray.setToolTip("OtoMusic");
 

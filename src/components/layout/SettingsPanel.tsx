@@ -3,7 +3,6 @@ import {
   CircleAlert,
   CircleCheckBig,
   Database,
-  DatabaseZap,
   Info,
   Laptop,
   LogOut,
@@ -25,7 +24,6 @@ import { createSubsonicClient } from "@/lib/api/client";
 import { audioEngine } from "@/lib/audio/AudioEngine";
 import { isElectronRuntime, updateGlobalShortcuts } from "@/lib/desktop-api";
 import { cn } from "@/lib/utils";
-import type { SavedServerProfile } from "@/stores/auth-store";
 import { useAuthStore } from "@/stores/auth-store";
 import {
   EQ_BAND_FREQUENCIES,
@@ -44,15 +42,6 @@ import { Slider } from "../ui/slider";
 type SettingsPanelProps = {
   open: boolean;
   onClose: () => void;
-};
-
-type ServerDraft = {
-  id?: string;
-  name: string;
-  baseUrl: string;
-  username: string;
-  password: string;
-  apiKey: string;
 };
 
 const themeOptions: Array<{
@@ -106,24 +95,6 @@ function formatEqFrequency(frequency: number) {
     return Number.isInteger(kilo) ? `${kilo}k` : `${kilo.toFixed(1)}k`;
   }
   return `${frequency}`;
-}
-
-function formatDateTime(timestamp: number) {
-  if (!Number.isFinite(timestamp) || timestamp <= 0) {
-    return "未知";
-  }
-
-  return new Date(timestamp).toLocaleString();
-}
-
-function emptyServerDraft(): ServerDraft {
-  return {
-    name: "",
-    baseUrl: "",
-    username: "",
-    password: "",
-    apiKey: "",
-  };
 }
 
 type ToggleRowProps = {
@@ -236,12 +207,12 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
 
   const session = useAuthStore((state) => state.session);
   const isAuthenticated = useAuthStore((state) => state.isAuthenticated);
-  const savedServers = useAuthStore((state) => state.savedServers);
-  const activeServerId = useAuthStore((state) => state.activeServerId);
+  const serverConfig = useAuthStore((state) => state.serverConfig);
   const logout = useAuthStore((state) => state.logout);
-  const saveServerProfile = useAuthStore((state) => state.saveServerProfile);
-  const removeServerProfile = useAuthStore((state) => state.removeServerProfile);
-  const connectServerProfile = useAuthStore((state) => state.connectServerProfile);
+  const saveServerConfig = useAuthStore((state) => state.saveServerConfig);
+  const addFallbackUrl = useAuthStore((state) => state.addFallbackUrl);
+  const removeFallbackUrl = useAuthStore((state) => state.removeFallbackUrl);
+  const switchActiveUrl = useAuthStore((state) => state.switchActiveUrl);
 
   const [outputDevices, setOutputDevices] = useState<MediaDeviceInfo[]>([]);
   const [loadingDevices, setLoadingDevices] = useState(false);
@@ -249,9 +220,9 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
   const [scanStatusText, setScanStatusText] = useState("尚未触发扫描");
   const [scanLoading, setScanLoading] = useState(false);
   const [scanError, setScanError] = useState<string | null>(null);
-  const [serverDraft, setServerDraft] = useState<ServerDraft>(emptyServerDraft);
-  const [serverDraftError, setServerDraftError] = useState<string | null>(null);
-  const [serverConnectPendingId, setServerConnectPendingId] = useState<string | null>(null);
+  const [fallbackDraft, setFallbackDraft] = useState("");
+  const [fallbackError, setFallbackError] = useState<string | null>(null);
+  const [switchingUrl, setSwitchingUrl] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<SettingsTab>("appearance");
 
   const supportsOutputSelection = useMemo(() => audioEngine.supportsOutputDeviceSelection(), []);
@@ -283,12 +254,6 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
       return session.baseUrl;
     }
   }, [session?.baseUrl]);
-
-  const sortedServers = useMemo(
-    () =>
-      [...savedServers].sort((left, right) => (right.lastConnectedAt ?? 0) - (left.lastConnectedAt ?? 0)),
-    [savedServers],
-  );
 
   const refreshOutputDevices = useCallback(async () => {
     if (!supportsOutputSelection) {
@@ -440,22 +405,16 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
       return;
     }
 
-    if (session) {
-      setServerDraft((previous) => {
-        if (previous.baseUrl || previous.username || previous.password) {
-          return previous;
-        }
-
-        return {
-          ...previous,
-          name: previous.name || "当前服务器",
-          baseUrl: session.baseUrl,
-          username: session.username,
-          password: session.password,
-        };
+    if (session && !serverConfig) {
+      saveServerConfig({
+        name: "当前服务器",
+        primaryUrl: session.baseUrl,
+        fallbackUrls: [],
+        username: session.username,
+        password: session.password,
       });
     }
-  }, [open, session]);
+  }, [open, session, serverConfig, saveServerConfig]);
 
   const handleChangeOutputDevice = async (event: ChangeEvent<HTMLSelectElement>) => {
     const nextDeviceId = event.target.value;
@@ -504,43 +463,31 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
     setFadeDurationSec(next);
   };
 
-  const handleSaveServer = () => {
-    const id = saveServerProfile({
-      id: serverDraft.id,
-      name: serverDraft.name,
-      baseUrl: serverDraft.baseUrl,
-      username: serverDraft.username,
-      password: serverDraft.password,
-      apiKey: serverDraft.apiKey,
-    });
-
-    if (!id) {
-      setServerDraftError("请完整填写名称、地址、用户名和密码");
+  const handleAddFallbackUrl = () => {
+    const trimmed = fallbackDraft.trim();
+    if (!trimmed) {
+      setFallbackError("请输入备用地址");
       return;
     }
-
-    setServerDraftError(null);
-    setServerDraft(emptyServerDraft());
+    if (serverConfig?.primaryUrl === trimmed) {
+      setFallbackError("备用地址不能与主地址相同");
+      return;
+    }
+    if (serverConfig?.fallbackUrls.includes(trimmed)) {
+      setFallbackError("该备用地址已存在");
+      return;
+    }
+    addFallbackUrl(trimmed);
+    setFallbackDraft("");
+    setFallbackError(null);
   };
 
-  const handleEditServer = (profile: SavedServerProfile) => {
-    setServerDraft({
-      id: profile.id,
-      name: profile.name,
-      baseUrl: profile.baseUrl,
-      username: profile.username,
-      password: profile.password,
-      apiKey: profile.apiKey ?? "",
-    });
-    setServerDraftError(null);
-  };
-
-  const handleConnectServer = async (profileId: string) => {
-    setServerConnectPendingId(profileId);
+  const handleSwitchUrl = async (url: string) => {
+    setSwitchingUrl(url);
     try {
-      await connectServerProfile(profileId);
+      await switchActiveUrl(url);
     } finally {
-      setServerConnectPendingId(null);
+      setSwitchingUrl(null);
     }
   };
 
@@ -989,7 +936,7 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                 <section className="rounded-2xl border border-slate-200/80 bg-white/90 p-4 dark:border-slate-800/80 dark:bg-slate-900/70">
                   <div className="mb-3">
                     <h3 className="text-sm font-semibold">数据与服务器</h3>
-                    <p className="mt-1 text-xs text-slate-600 dark:text-slate-300">缓存管理、多服务器、媒体库扫描</p>
+                    <p className="mt-1 text-xs text-slate-600 dark:text-slate-300">缓存管理、服务器地址、媒体库扫描</p>
                   </div>
 
                   <div className="space-y-3">
@@ -1063,105 +1010,120 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                     <div className="rounded-xl border border-slate-200/80 bg-slate-50/70 p-3 dark:border-slate-800/80 dark:bg-slate-950/35">
                       <div className="mb-2 flex items-center gap-2">
                         <Server className="h-4 w-4 text-slate-500" />
-                        <p className="text-xs font-medium">多服务器管理</p>
+                        <p className="text-xs font-medium">服务器地址</p>
                       </div>
-                      <div className="space-y-2">
-                        {sortedServers.length === 0 ? (
-                          <p className="text-[11px] text-slate-500 dark:text-slate-400">暂无已保存服务器</p>
-                        ) : (
-                          sortedServers.map((server) => {
-                            const active = activeServerId === server.id;
-                            return (
+
+                      {serverConfig ? (
+                        <div className="space-y-2">
+                          <div className="rounded-lg border border-slate-200 bg-white/80 px-2.5 py-2 dark:border-slate-700 dark:bg-slate-900/70">
+                            <p className="text-xs font-medium">{serverConfig.name}</p>
+                            <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                              {serverConfig.username}
+                            </p>
+                          </div>
+
+                          <div className="space-y-1.5">
+                            <p className="text-[11px] font-medium text-slate-600 dark:text-slate-300">地址列表</p>
+
+                            <div
+                              className={cn(
+                                "flex items-center justify-between gap-2 rounded-lg border px-2.5 py-1.5",
+                                session?.baseUrl === serverConfig.primaryUrl
+                                  ? "border-[var(--accent-border)] bg-[var(--accent-soft)]"
+                                  : "border-slate-200 bg-white/80 dark:border-slate-700 dark:bg-slate-900/70",
+                              )}
+                            >
+                              <div className="min-w-0">
+                                <div className="flex items-center gap-1.5">
+                                  <span className="shrink-0 rounded bg-slate-200 px-1 py-0.5 text-[9px] font-medium dark:bg-slate-700">主</span>
+                                  <p className="truncate text-[11px]">{serverConfig.primaryUrl}</p>
+                                </div>
+                              </div>
+                              {session?.baseUrl !== serverConfig.primaryUrl ? (
+                                <button
+                                  type="button"
+                                  onClick={() => { void handleSwitchUrl(serverConfig.primaryUrl); }}
+                                  disabled={switchingUrl === serverConfig.primaryUrl}
+                                  className="shrink-0 rounded-md border border-slate-300 px-2 py-0.5 text-[10px] transition-colors hover:bg-slate-100 disabled:opacity-50 dark:border-slate-600 dark:hover:bg-slate-800"
+                                >
+                                  {switchingUrl === serverConfig.primaryUrl ? "切换中" : "切换"}
+                                </button>
+                              ) : (
+                                <span className="shrink-0 text-[10px] text-[var(--accent-text)]">当前</span>
+                              )}
+                            </div>
+
+                            {serverConfig.fallbackUrls.map((url) => (
                               <div
-                                key={server.id}
+                                key={url}
                                 className={cn(
-                                  "rounded-lg border px-2.5 py-2",
-                                  active
+                                  "flex items-center justify-between gap-2 rounded-lg border px-2.5 py-1.5",
+                                  session?.baseUrl === url
                                     ? "border-[var(--accent-border)] bg-[var(--accent-soft)]"
                                     : "border-slate-200 bg-white/80 dark:border-slate-700 dark:bg-slate-900/70",
                                 )}
                               >
-                                <div className="flex items-start justify-between gap-2">
-                                  <div className="min-w-0">
-                                    <p className="truncate text-xs font-medium">{server.name}</p>
-                                    <p className="truncate text-[11px] text-slate-500 dark:text-slate-400">
-                                      {server.username}@{server.baseUrl}
-                                    </p>
-                                    <p className="mt-0.5 text-[10px] text-slate-400 dark:text-slate-500">
-                                      最近连接: {formatDateTime(server.lastConnectedAt)}
-                                    </p>
-                                  </div>
-                                  <div className="flex items-center gap-1">
-                                    <button
-                                      type="button"
-                                      onClick={() => {
-                                        void handleConnectServer(server.id);
-                                      }}
-                                      disabled={serverConnectPendingId === server.id}
-                                      className="rounded-md border border-slate-300 px-2 py-1 text-[10px] transition-colors hover:bg-slate-100 disabled:opacity-50 dark:border-slate-600 dark:hover:bg-slate-800"
-                                    >
-                                      {serverConnectPendingId === server.id ? "连接中" : active ? "已连接" : "连接"}
-                                    </button>
-                                    <button
-                                      type="button"
-                                      onClick={() => handleEditServer(server)}
-                                      className="rounded-md border border-slate-300 px-2 py-1 text-[10px] transition-colors hover:bg-slate-100 dark:border-slate-600 dark:hover:bg-slate-800"
-                                    >
-                                      编辑
-                                    </button>
-                                    <button
-                                      type="button"
-                                      onClick={() => removeServerProfile(server.id)}
-                                      className="rounded-md border border-rose-200 px-2 py-1 text-[10px] text-rose-600 transition-colors hover:bg-rose-50 dark:border-rose-900/70 dark:text-rose-300 dark:hover:bg-rose-950/35"
-                                    >
-                                      删除
-                                    </button>
+                                <div className="min-w-0">
+                                  <div className="flex items-center gap-1.5">
+                                    <span className="shrink-0 rounded bg-slate-100 px-1 py-0.5 text-[9px] text-slate-500 dark:bg-slate-800 dark:text-slate-400">备</span>
+                                    <p className="truncate text-[11px]">{url}</p>
                                   </div>
                                 </div>
+                                <div className="flex shrink-0 items-center gap-1">
+                                  {session?.baseUrl === url ? (
+                                    <span className="text-[10px] text-[var(--accent-text)]">当前</span>
+                                  ) : (
+                                    <button
+                                      type="button"
+                                      onClick={() => { void handleSwitchUrl(url); }}
+                                      disabled={switchingUrl === url}
+                                      className="rounded-md border border-slate-300 px-2 py-0.5 text-[10px] transition-colors hover:bg-slate-100 disabled:opacity-50 dark:border-slate-600 dark:hover:bg-slate-800"
+                                    >
+                                      {switchingUrl === url ? "切换中" : "切换"}
+                                    </button>
+                                  )}
+                                  <button
+                                    type="button"
+                                    onClick={() => removeFallbackUrl(url)}
+                                    className="rounded-md border border-rose-200 px-1.5 py-0.5 text-[10px] text-rose-600 transition-colors hover:bg-rose-50 dark:border-rose-900/70 dark:text-rose-300 dark:hover:bg-rose-950/35"
+                                  >
+                                    删除
+                                  </button>
+                                </div>
                               </div>
-                            );
-                          })
-                        )}
-                      </div>
+                            ))}
+                          </div>
 
-                      <div className="mt-3 grid grid-cols-2 gap-2">
-                        <Input
-                          value={serverDraft.name}
-                          placeholder="配置名"
-                          onChange={(event) => setServerDraft((previous) => ({ ...previous, name: event.target.value }))}
-                        />
-                        <Input
-                          value={serverDraft.username}
-                          placeholder="用户名"
-                          onChange={(event) => setServerDraft((previous) => ({ ...previous, username: event.target.value }))}
-                        />
-                        <Input
-                          value={serverDraft.baseUrl}
-                          placeholder="https://server"
-                          className="col-span-2"
-                          onChange={(event) => setServerDraft((previous) => ({ ...previous, baseUrl: event.target.value }))}
-                        />
-                        <Input
-                          type="password"
-                          value={serverDraft.password}
-                          placeholder="密码 / Token"
-                          onChange={(event) => setServerDraft((previous) => ({ ...previous, password: event.target.value }))}
-                        />
-                        <Input
-                          value={serverDraft.apiKey}
-                          placeholder="Subsonic API Key（可选）"
-                          onChange={(event) => setServerDraft((previous) => ({ ...previous, apiKey: event.target.value }))}
-                        />
-                      </div>
+                          <div className="flex gap-2">
+                            <Input
+                              value={fallbackDraft}
+                              placeholder="https://备用地址"
+                              className="flex-1"
+                              onChange={(event) => {
+                                setFallbackDraft(event.target.value);
+                                setFallbackError(null);
+                              }}
+                              onKeyDown={(event) => {
+                                if (event.key === "Enter") {
+                                  event.preventDefault();
+                                  handleAddFallbackUrl();
+                                }
+                              }}
+                            />
+                            <Button variant="outline" className="h-9 shrink-0 text-xs" onClick={handleAddFallbackUrl}>
+                              添加备用
+                            </Button>
+                          </div>
 
-                      {serverDraftError ? (
-                        <p className="mt-2 text-[11px] text-rose-600 dark:text-rose-300">{serverDraftError}</p>
-                      ) : null}
-
-                      <Button variant="outline" className="mt-3 h-8 w-full text-xs" onClick={handleSaveServer}>
-                        <DatabaseZap className="mr-1.5 h-3.5 w-3.5" />
-                        {serverDraft.id ? "更新服务器配置" : "保存服务器配置"}
-                      </Button>
+                          {fallbackError ? (
+                            <p className="text-[11px] text-rose-600 dark:text-rose-300">{fallbackError}</p>
+                          ) : null}
+                        </div>
+                      ) : (
+                        <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                          尚未配置服务器，请先登录
+                        </p>
+                      )}
                     </div>
                   </div>
                 </section>

@@ -245,7 +245,7 @@ export function NowPlayingSheet({
       animate={{ y: 0 }}
       exit={{ y: "105%" }}
       transition={{ duration: 0.36, ease: [0.22, 1, 0.36, 1] }}
-      className="absolute inset-0 z-[60] overflow-hidden"
+      className="absolute inset-0 z-[60] overflow-hidden bg-black"
     >
       {/* Background layers */}
       <div className="absolute inset-0 scale-110">

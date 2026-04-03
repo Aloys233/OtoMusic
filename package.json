@@ -1,7 +1,7 @@
 {
   "name": "otomusic",
   "private": true,
-  "version": "0.0.5",
+  "version": "0.0.6",
   "description": "OtoMusic desktop player for Navidrome/Subsonic libraries.",
   "author": {
     "name": "Aloys23",
@@ -20,7 +20,14 @@
     "files": [
       "dist/**",
       "dist-electron/**",
+      "electron/assets/**",
       "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "electron/assets/icon.png",
+        "to": "tray/icon.png"
+      }
     ],
     "asar": true,
     "linux": {

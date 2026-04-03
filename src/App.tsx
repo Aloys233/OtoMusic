@@ -30,6 +30,7 @@ import { useGlobalSearch } from "@/features/library/hooks/use-global-search";
 import { useLovedTracks } from "@/features/library/hooks/use-loved-tracks";
 import { useLyrics } from "@/features/library/hooks/use-lyrics";
 import { useMusicFolders } from "@/features/library/hooks/use-music-folders";
+import { useArtistInfo } from "@/features/library/hooks/use-artist-info";
 import { AlbumGridItem } from "@/features/library/components/AlbumGridItem";
 import { SongListItem } from "@/features/library/components/SongListItem";
 import { NowPlayingSheet } from "@/features/player/components/NowPlayingSheet";
@@ -238,6 +239,8 @@ export default function App() {
   const [isNowPlayingSheetOpen, setNowPlayingSheetOpen] = useState(false);
   const [isSettingsPanelOpen, setSettingsPanelOpen] = useState(false);
   const [isRefreshingLibrary, setRefreshingLibrary] = useState(false);
+  const [isBioExpanded, setBioExpanded] = useState(false);
+  const [artistImageLoadFailed, setArtistImageLoadFailed] = useState(false);
   const [searchInput, setSearchInput] = useState("");
   const [debouncedSearchInput, setDebouncedSearchInput] = useState("");
   const [selectedArtistName, setSelectedArtistName] = useState<string | null>(null);
@@ -349,6 +352,29 @@ export default function App() {
     isError: musicFoldersError,
     error: musicFoldersErrorObj,
   } = useMusicFolders(client, sessionKey);
+
+  const artistDetailArtistId = useMemo(() => {
+    if (!normalizedSelectedArtistName) return undefined;
+    const keyword = normalizedSelectedArtistName.toLowerCase();
+    const exactAlbumArtistId = artistDetailSearchData.albums.find(
+      (album) => album.artistId && album.artist?.trim().toLowerCase() === keyword,
+    )?.artistId;
+    if (exactAlbumArtistId) {
+      return exactAlbumArtistId;
+    }
+
+    const exactSongArtistId = artistDetailSearchData.songs.find(
+      (song) => song.artistId && song.artist?.trim().toLowerCase() === keyword,
+    )?.artistId;
+    if (exactSongArtistId) {
+      return exactSongArtistId;
+    }
+
+    return artistDetailSearchData.albums.find((album) => album.artistId)?.artistId ??
+      artistDetailSearchData.songs.find((song) => song.artistId)?.artistId;
+  }, [artistDetailSearchData.albums, artistDetailSearchData.songs, normalizedSelectedArtistName]);
+
+  const { data: artistInfoData } = useArtistInfo(client, sessionKey, artistDetailArtistId);
 
   const albumCards = useMemo(() => albumData.map(toCardItem), [albumData]);
 
@@ -897,6 +923,11 @@ export default function App() {
   const artistDetailCoverArt = artistDetailAlbums.find((album) => album.coverArt)?.coverArt ??
     artistDetailSongs.find((song) => song.coverArt)?.coverArt;
   const artistDetailCoverUrl = getAlbumCoverUrl(artistDetailCoverArt, 320);
+  const artistDetailImageUrl = artistInfoData?.largeImageUrl ||
+    artistInfoData?.mediumImageUrl ||
+    artistInfoData?.smallImageUrl ||
+    artistDetailCoverUrl;
+  const shouldShowArtistImage = Boolean(artistDetailImageUrl) && !artistImageLoadFailed;
   const artistDetailArtistInitials = normalizedSelectedArtistName
     ? getArtistInitials(normalizedSelectedArtistName)
     : "";
@@ -947,6 +978,19 @@ export default function App() {
     const max = Math.max(...years);
     return min === max ? `${min}` : `${min} – ${max}`;
   }, [artistDetailAlbums]);
+  const artistBiography = useMemo(() => {
+    const raw = artistInfoData?.biography;
+    if (!raw) return "";
+    return raw.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim();
+  }, [artistInfoData?.biography]);
+
+  useEffect(() => {
+    setBioExpanded(false);
+  }, [normalizedSelectedArtistName]);
+
+  useEffect(() => {
+    setArtistImageLoadFailed(false);
+  }, [artistDetailImageUrl]);
   const albumFormatInfo = useMemo(() => {
     if (visibleSongs.length === 0) return null;
     const formats = new Map<string, number>();
@@ -2111,12 +2155,14 @@ export default function App() {
                         <div className="relative p-6 sm:p-8">
                           <div className="flex flex-col gap-5 sm:flex-row sm:items-start">
                             <div className="h-32 w-32 shrink-0 overflow-hidden rounded-2xl border-2 border-white/50 shadow-xl dark:border-slate-700/50">
-                              {artistDetailCoverUrl ? (
+                              {shouldShowArtistImage ? (
                                 <img
-                                  src={artistDetailCoverUrl}
+                                  src={artistDetailImageUrl ?? undefined}
                                   alt={`${normalizedSelectedArtistName} avatar`}
                                   className="h-full w-full object-cover"
                                   loading="lazy"
+                                  referrerPolicy="no-referrer"
+                                  onError={() => setArtistImageLoadFailed(true)}
                                 />
                               ) : (
                                 <div className="flex h-full w-full items-center justify-center bg-gradient-to-br from-[var(--accent-soft-strong)] to-blue-400/20 text-3xl font-bold tracking-wide text-[var(--accent-text)]">
@@ -2163,6 +2209,26 @@ export default function App() {
                                   ))}
                                 </div>
                               )}
+
+                              <div className="mt-3">
+                                <p
+                                  className={cn(
+                                    "text-xs leading-relaxed text-slate-600 dark:text-slate-400",
+                                    artistBiography && !isBioExpanded && "line-clamp-3",
+                                  )}
+                                >
+                                  {artistBiography || "暂无歌手介绍。"}
+                                </p>
+                                {artistBiography.length > 150 && (
+                                  <button
+                                    type="button"
+                                    onClick={() => setBioExpanded(!isBioExpanded)}
+                                    className="mt-1 text-xs font-medium text-[var(--accent-text)] hover:underline"
+                                  >
+                                    {isBioExpanded ? "收起" : "展开"}
+                                  </button>
+                                )}
+                              </div>
 
                               <div className="mt-4 flex items-center gap-2">
                                 <Button

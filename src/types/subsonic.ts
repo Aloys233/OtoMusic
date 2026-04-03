@@ -15,6 +15,7 @@ export type SubsonicSong = {
   id: string;
   title: string;
   artist?: string;
+  artistId?: string;
   album?: string;
   albumId?: string;
   coverArt?: string;
@@ -40,6 +41,15 @@ export type SubsonicGenre = {
 export type SubsonicMusicFolder = {
   id: string;
   name?: string;
+};
+
+export type SubsonicArtistInfo2 = {
+  biography?: string;
+  musicBrainzId?: string;
+  lastFmUrl?: string;
+  smallImageUrl?: string;
+  mediumImageUrl?: string;
+  largeImageUrl?: string;
 };
 
 export type SubsonicResponseEnvelope<T> = {
