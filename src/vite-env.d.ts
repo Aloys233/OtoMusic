@@ -10,6 +10,24 @@ interface ElectronBridge {
     nextTrack: string;
     previousTrack: string;
   }): void;
+  mpvIsAvailable(): Promise<boolean>;
+  mpvPlay(payload: {
+    url: string;
+    startSeconds?: number;
+    paused?: boolean;
+    volume?: number;
+    speed?: number;
+  }): Promise<void>;
+  mpvPause(): Promise<void>;
+  mpvResume(): Promise<void>;
+  mpvStop(): Promise<void>;
+  mpvSeek(seconds: number): Promise<void>;
+  mpvSetVolume(volume: number): Promise<void>;
+  mpvSetSpeed(speed: number): Promise<void>;
+  mpvGetTimePos(): Promise<number>;
+  mpvGetDuration(): Promise<number>;
+  onMpvEnded(handler: () => void): () => void;
+  onMpvProperty(handler: (name: "time-pos" | "duration" | "pause", value: unknown) => void): () => void;
 }
 
 declare global {

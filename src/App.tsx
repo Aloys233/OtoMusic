@@ -4,6 +4,7 @@ import {
   CalendarDays,
   Clock3,
   Disc3,
+  Download,
   FolderTree,
   Heart,
   ListMusic,
@@ -30,6 +31,8 @@ import { useGlobalSearch } from "@/features/library/hooks/use-global-search";
 import { useLovedTracks } from "@/features/library/hooks/use-loved-tracks";
 import { useLyrics } from "@/features/library/hooks/use-lyrics";
 import { useMusicFolders } from "@/features/library/hooks/use-music-folders";
+import { usePlaylistDetail } from "@/features/library/hooks/use-playlist-detail";
+import { usePlaylists } from "@/features/library/hooks/use-playlists";
 import { useArtistInfo } from "@/features/library/hooks/use-artist-info";
 import { AlbumGridItem } from "@/features/library/components/AlbumGridItem";
 import { SongListItem } from "@/features/library/components/SongListItem";
@@ -40,11 +43,13 @@ import { useMediaSession } from "@/hooks/use-media-session";
 import { useScrobbling } from "@/hooks/use-scrobbling";
 import { useSmoothScroll } from "@/hooks/use-smooth-scroll";
 import { useTrayControls } from "@/hooks/use-tray-controls";
+import { useUpdateChecker } from "@/hooks/use-update-checker";
 import { createSubsonicClient } from "@/lib/api/client";
 import { cn } from "@/lib/utils";
 import { useAuthStore } from "@/stores/auth-store";
 import { type LibraryNavSection, useLibraryStore } from "@/stores/library-store";
 import { usePlayerStore } from "@/stores/player-store";
+import { useRecentPlayStore } from "@/stores/recent-play-store";
 import { useSettingsStore } from "@/stores/settings-store";
 import type { SubsonicAlbum } from "@/types/subsonic";
 
@@ -103,6 +108,21 @@ function formatDuration(totalSeconds: number) {
   return `${minutes} 分钟`;
 }
 
+function formatDateTime(value: string | undefined) {
+  if (!value) {
+    return null;
+  }
+
+  const parsed = Date.parse(value);
+  if (!Number.isFinite(parsed)) {
+    return value;
+  }
+
+  return new Date(parsed).toLocaleString("zh-CN", {
+    hour12: false,
+  });
+}
+
 function getArtistInitials(artist: string) {
   const trimmed = artist.trim();
   if (!trimmed) {
@@ -138,6 +158,30 @@ function matchKeyword(keyword: string, ...values: Array<string | undefined>) {
 
   const normalized = keyword.trim().toLowerCase();
   return values.some((value) => value?.toLowerCase().includes(normalized));
+}
+
+function normalizeRange(value: number, min: number, max: number, fallback: number) {
+  if (!Number.isFinite(value)) {
+    return fallback;
+  }
+
+  if (!Number.isFinite(min) || !Number.isFinite(max) || max <= min) {
+    return fallback;
+  }
+
+  const normalized = (value - min) / (max - min);
+  return Math.min(1, Math.max(0, normalized));
+}
+
+function hashToUnitInterval(input: string) {
+  let hash = 2166136261;
+
+  for (const char of input) {
+    hash ^= char.charCodeAt(0);
+    hash += (hash << 1) + (hash << 4) + (hash << 7) + (hash << 8) + (hash << 24);
+  }
+
+  return (hash >>> 0) / 4294967295;
 }
 
 function getAlbumColumns(viewportWidth: number) {
@@ -200,6 +244,7 @@ export default function App() {
   const mainRef = useRef<HTMLElement>(null);
   const goBackRef = useRef<() => void>(() => {});
   const goForwardRef = useRef<() => void>(() => {});
+  const hasAutoCheckedUpdateRef = useRef(false);
   useSmoothScroll(mainRef);
 
   const session = useAuthStore((state) => state.session);
@@ -223,6 +268,8 @@ export default function App() {
   const setQueue = usePlayerStore((state) => state.setQueue);
   const setPlaying = usePlayerStore((state) => state.setPlaying);
   const playTrackById = usePlayerStore((state) => state.playTrackById);
+  const recentPlays = useRecentPlayStore((state) => state.recentPlays);
+  const recordRecentPlay = useRecentPlayStore((state) => state.recordPlay);
   const accentColor = useSettingsStore((state) => state.accentColor);
   const accentSource = useSettingsStore((state) => state.accentSource);
   const lyricsFontScale = useSettingsStore((state) => state.lyricsFontScale);
@@ -244,6 +291,7 @@ export default function App() {
   const [searchInput, setSearchInput] = useState("");
   const [debouncedSearchInput, setDebouncedSearchInput] = useState("");
   const [selectedArtistName, setSelectedArtistName] = useState<string | null>(null);
+  const [selectedPlaylistId, setSelectedPlaylistId] = useState<string | null>(null);
   const [navHistory, setNavHistory] = useState<{
     stack: LibraryNavSection[];
     index: number;
@@ -252,6 +300,7 @@ export default function App() {
     index: 0,
   });
   const queryClient = useQueryClient();
+  const updateChecker = useUpdateChecker();
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -267,6 +316,15 @@ export default function App() {
       window.removeEventListener("resize", onResize);
     };
   }, []);
+
+  useEffect(() => {
+    if (hasAutoCheckedUpdateRef.current) {
+      return;
+    }
+
+    hasAutoCheckedUpdateRef.current = true;
+    void updateChecker.checkForUpdate();
+  }, [updateChecker.checkForUpdate]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -352,6 +410,18 @@ export default function App() {
     isError: musicFoldersError,
     error: musicFoldersErrorObj,
   } = useMusicFolders(client, sessionKey);
+  const {
+    data: playlistsData = [],
+    isLoading: playlistsLoading,
+    isError: playlistsError,
+    error: playlistsErrorObj,
+  } = usePlaylists(client, sessionKey);
+  const {
+    data: playlistDetailData,
+    isLoading: playlistDetailLoading,
+    isError: playlistDetailError,
+    error: playlistDetailErrorObj,
+  } = usePlaylistDetail(client, sessionKey, selectedPlaylistId);
 
   const artistDetailArtistId = useMemo(() => {
     if (!normalizedSelectedArtistName) return undefined;
@@ -379,9 +449,43 @@ export default function App() {
   const albumCards = useMemo(() => albumData.map(toCardItem), [albumData]);
 
   const filteredAlbums = useMemo(
-    () => albumCards.filter((album) => matchKeyword(searchKeyword, album.title, album.artist)),
+    () => albumCards.filter((album) => matchKeyword(searchKeyword, album.title, album.artist, album.genre)),
     [albumCards, searchKeyword],
   );
+  const recentPlayedAlbums = useMemo(() => {
+    if (!sessionKey || albumCards.length === 0) {
+      return [];
+    }
+
+    const albumById = new Map(albumCards.map((album) => [album.id, album]));
+    const pickedAlbumIds = new Set<string>();
+    const pickedAlbums: AlbumCard[] = [];
+
+    for (const entry of recentPlays) {
+      if (entry.sessionKey !== sessionKey) {
+        continue;
+      }
+
+      const albumId = entry.albumId?.trim();
+      if (!albumId || pickedAlbumIds.has(albumId)) {
+        continue;
+      }
+
+      const album = albumById.get(albumId);
+      if (!album) {
+        continue;
+      }
+
+      if (!matchKeyword(searchKeyword, album.title, album.artist, album.genre)) {
+        continue;
+      }
+
+      pickedAlbums.push(album);
+      pickedAlbumIds.add(albumId);
+    }
+
+    return pickedAlbums;
+  }, [albumCards, recentPlays, searchKeyword, sessionKey]);
 
   const visibleSongs = useMemo(
     () =>
@@ -590,13 +694,105 @@ export default function App() {
       });
   }, [albumCards, debouncedSearchInput]);
 
-  const discoverRecentAlbums = useMemo(
-    () =>
-      [...filteredAlbums]
-        .sort((a, b) => b.createdAt - a.createdAt)
-        .slice(0, 12),
-    [filteredAlbums],
-  );
+  const recommendationSeedKey = useMemo(() => {
+    const now = new Date();
+    const month = `${now.getMonth() + 1}`.padStart(2, "0");
+    const day = `${now.getDate()}`.padStart(2, "0");
+    return `${now.getFullYear()}-${month}-${day}`;
+  }, []);
+  const discoverRecommendedAlbums = useMemo(() => {
+    if (filteredAlbums.length === 0) {
+      return [];
+    }
+
+    const songCounts = filteredAlbums.map((album) => album.songCount ?? 0);
+    const durations = filteredAlbums.map((album) => album.duration ?? 0);
+    const validYears = filteredAlbums.map((album) => album.year ?? 0).filter((year) => year > 0);
+    const validCreatedAt = filteredAlbums
+      .map((album) => album.createdAt)
+      .filter((createdAt) => createdAt > 0);
+
+    const songCountMin = Math.min(...songCounts);
+    const songCountMax = Math.max(...songCounts);
+    const durationMin = Math.min(...durations);
+    const durationMax = Math.max(...durations);
+    const yearMin = validYears.length > 0 ? Math.min(...validYears) : 0;
+    const yearMax = validYears.length > 0 ? Math.max(...validYears) : 0;
+    const createdAtMin = validCreatedAt.length > 0 ? Math.min(...validCreatedAt) : 0;
+    const createdAtMax = validCreatedAt.length > 0 ? Math.max(...validCreatedAt) : 0;
+
+    const scored = filteredAlbums
+      .map((album) => {
+        const songScore = normalizeRange(album.songCount ?? 0, songCountMin, songCountMax, 0.35);
+        const durationScore = normalizeRange(album.duration ?? 0, durationMin, durationMax, 0.25);
+        const yearScore = album.year
+          ? normalizeRange(album.year, yearMin, yearMax, 0.4)
+          : 0.4;
+        const recencyScore = album.createdAt > 0
+          ? normalizeRange(album.createdAt, createdAtMin, createdAtMax, 0.5)
+          : 0.5;
+        const randomScore = hashToUnitInterval(`${recommendationSeedKey}:${album.id}`);
+
+        return {
+          album,
+          score:
+            songScore * 0.34 +
+            durationScore * 0.23 +
+            yearScore * 0.16 +
+            recencyScore * 0.12 +
+            randomScore * 0.15,
+        };
+      })
+      .sort((a, b) => {
+        const scoreGap = b.score - a.score;
+        if (scoreGap !== 0) {
+          return scoreGap;
+        }
+
+        const songCountGap = (b.album.songCount ?? 0) - (a.album.songCount ?? 0);
+        if (songCountGap !== 0) {
+          return songCountGap;
+        }
+
+        const createdAtGap = b.album.createdAt - a.album.createdAt;
+        if (createdAtGap !== 0) {
+          return createdAtGap;
+        }
+
+        return a.album.title.localeCompare(b.album.title);
+      });
+
+    const picked: AlbumCard[] = [];
+    const pickedArtistKeys = new Set<string>();
+
+    for (const item of scored) {
+      const artistKey = item.album.artist.trim().toLowerCase();
+      if (pickedArtistKeys.has(artistKey)) {
+        continue;
+      }
+
+      picked.push(item.album);
+      pickedArtistKeys.add(artistKey);
+
+      if (picked.length >= 12) {
+        return picked;
+      }
+    }
+
+    const pickedAlbumIds = new Set(picked.map((album) => album.id));
+    for (const item of scored) {
+      if (pickedAlbumIds.has(item.album.id)) {
+        continue;
+      }
+
+      picked.push(item.album);
+      if (picked.length >= 12) {
+        break;
+      }
+    }
+
+    return picked;
+  }, [filteredAlbums, recommendationSeedKey]);
   const discoverCollectionAlbums = useMemo(
     () =>
       [...filteredAlbums]
@@ -611,6 +807,144 @@ export default function App() {
         .slice(0, 12),
     [filteredAlbums],
   );
+  const forYouAlbumIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const album of discoverRecommendedAlbums) {
+      ids.add(album.id);
+    }
+    for (const album of discoverCollectionAlbums) {
+      ids.add(album.id);
+    }
+    return ids;
+  }, [discoverCollectionAlbums, discoverRecommendedAlbums]);
+  const forYouExploreAlbums = useMemo(() => {
+    const uniqueById = new Map<string, AlbumCard>();
+    for (const album of [...discoverRecommendedAlbums, ...discoverCollectionAlbums]) {
+      if (!uniqueById.has(album.id)) {
+        uniqueById.set(album.id, album);
+      }
+    }
+    return Array.from(uniqueById.values());
+  }, [discoverCollectionAlbums, discoverRecommendedAlbums]);
+  const discoverPoolAlbums = useMemo(
+    () => filteredAlbums.filter((album) => !forYouAlbumIds.has(album.id)),
+    [filteredAlbums, forYouAlbumIds],
+  );
+  const discoverGenreSections = useMemo(() => {
+    const genreMap = new Map<string, AlbumCard[]>();
+
+    for (const album of discoverPoolAlbums) {
+      const genre = album.genre?.trim();
+      if (!genre) {
+        continue;
+      }
+
+      const list = genreMap.get(genre);
+      if (list) {
+        list.push(album);
+      } else {
+        genreMap.set(genre, [album]);
+      }
+    }
+
+    const sections = Array.from(genreMap.entries())
+      .map(([genre, albums]) => {
+        const songCounts = albums.map((album) => album.songCount ?? 0);
+        const durations = albums.map((album) => album.duration ?? 0);
+        const validYears = albums.map((album) => album.year ?? 0).filter((year) => year > 0);
+        const validCreatedAt = albums.map((album) => album.createdAt).filter((createdAt) => createdAt > 0);
+
+        const songCountMin = Math.min(...songCounts);
+        const songCountMax = Math.max(...songCounts);
+        const durationMin = Math.min(...durations);
+        const durationMax = Math.max(...durations);
+        const yearMin = validYears.length > 0 ? Math.min(...validYears) : 0;
+        const yearMax = validYears.length > 0 ? Math.max(...validYears) : 0;
+        const createdAtMin = validCreatedAt.length > 0 ? Math.min(...validCreatedAt) : 0;
+        const createdAtMax = validCreatedAt.length > 0 ? Math.max(...validCreatedAt) : 0;
+
+        const topAlbums = [...albums]
+          .sort((a, b) => {
+            const aSongScore = normalizeRange(a.songCount ?? 0, songCountMin, songCountMax, 0.4);
+            const bSongScore = normalizeRange(b.songCount ?? 0, songCountMin, songCountMax, 0.4);
+            const aDurationScore = normalizeRange(a.duration ?? 0, durationMin, durationMax, 0.3);
+            const bDurationScore = normalizeRange(b.duration ?? 0, durationMin, durationMax, 0.3);
+            const aYearScore = a.year ? normalizeRange(a.year, yearMin, yearMax, 0.35) : 0.35;
+            const bYearScore = b.year ? normalizeRange(b.year, yearMin, yearMax, 0.35) : 0.35;
+            const aRecencyScore = a.createdAt > 0
+              ? normalizeRange(a.createdAt, createdAtMin, createdAtMax, 0.45)
+              : 0.45;
+            const bRecencyScore = b.createdAt > 0
+              ? normalizeRange(b.createdAt, createdAtMin, createdAtMax, 0.45)
+              : 0.45;
+            const aRandomScore = hashToUnitInterval(`${recommendationSeedKey}:${genre}:${a.id}`);
+            const bRandomScore = hashToUnitInterval(`${recommendationSeedKey}:${genre}:${b.id}`);
+
+            const aScore = aSongScore * 0.38 + aDurationScore * 0.22 + aYearScore * 0.18 + aRecencyScore * 0.12 + aRandomScore * 0.1;
+            const bScore = bSongScore * 0.38 + bDurationScore * 0.22 + bYearScore * 0.18 + bRecencyScore * 0.12 + bRandomScore * 0.1;
+
+            const scoreGap = bScore - aScore;
+            if (scoreGap !== 0) {
+              return scoreGap;
+            }
+
+            return a.title.localeCompare(b.title);
+          })
+          .slice(0, 12);
+
+        const artistCount = new Set(albums.map((album) => album.artist.trim().toLowerCase())).size;
+        const minYear = validYears.length > 0 ? Math.min(...validYears) : null;
+        const maxYear = validYears.length > 0 ? Math.max(...validYears) : null;
+        const yearRange = minYear && maxYear
+          ? minYear === maxYear
+            ? `${minYear}`
+            : `${minYear}-${maxYear}`
+          : null;
+
+        return {
+          key: genre.toLowerCase(),
+          genre,
+          albumCount: albums.length,
+          artistCount,
+          yearRange,
+          albums: topAlbums,
+        };
+      })
+      .sort((a, b) => {
+        const albumCountGap = b.albumCount - a.albumCount;
+        if (albumCountGap !== 0) {
+          return albumCountGap;
+        }
+
+        const artistCountGap = b.artistCount - a.artistCount;
+        if (artistCountGap !== 0) {
+          return artistCountGap;
+        }
+
+        return a.genre.localeCompare(b.genre);
+      });
+
+    return sections.slice(0, 4);
+  }, [discoverPoolAlbums, recommendationSeedKey]);
+  const discoverFreshAlbums = useMemo(
+    () =>
+      [...discoverPoolAlbums]
+        .sort((a, b) => {
+          const yearGap = (b.year ?? 0) - (a.year ?? 0);
+          if (yearGap !== 0) {
+            return yearGap;
+          }
+
+          const createdAtGap = b.createdAt - a.createdAt;
+          if (createdAtGap !== 0) {
+            return createdAtGap;
+          }
+
+          return (b.songCount ?? 0) - (a.songCount ?? 0);
+        })
+        .slice(0, 18),
+    [discoverPoolAlbums],
+  );
 
   useEffect(() => {
     if (isAuthenticated) {
@@ -619,6 +953,7 @@ export default function App() {
 
     setSelectedAlbumId(null);
     setSelectedArtistName(null);
+    setSelectedPlaylistId(null);
     setSearchInput("");
     setDebouncedSearchInput("");
     setSearchKeyword("");
@@ -642,6 +977,7 @@ export default function App() {
     setSearchInput,
     setSearchKeyword,
     setSelectedAlbumId,
+    setSelectedPlaylistId,
     setSelectedArtistName,
   ]);
 
@@ -652,7 +988,33 @@ export default function App() {
 
     setSelectedAlbumId(null);
     setSelectedArtistName(null);
-  }, [sessionKey, isAuthenticated, setSelectedAlbumId, setSelectedArtistName]);
+    setSelectedPlaylistId(null);
+  }, [sessionKey, isAuthenticated, setSelectedAlbumId, setSelectedArtistName, setSelectedPlaylistId]);
+
+  useEffect(() => {
+    if (!isAuthenticated) {
+      return;
+    }
+
+    if (playlistsData.length === 0) {
+      if (selectedPlaylistId !== null) {
+        setSelectedPlaylistId(null);
+      }
+      return;
+    }
+
+    if (!selectedPlaylistId || !playlistsData.some((playlist) => playlist.id === selectedPlaylistId)) {
+      setSelectedPlaylistId(playlistsData[0]?.id ?? null);
+    }
+  }, [isAuthenticated, playlistsData, selectedPlaylistId]);
+
+  useEffect(() => {
+    if (!isAuthenticated || !sessionKey || !isPlaying || !currentTrack) {
+      return;
+    }
+
+    recordRecentPlay(sessionKey, currentTrack);
+  }, [currentTrack, currentTrackId, isAuthenticated, isPlaying, recordRecentPlay, sessionKey]);
 
   useEffect(() => {
     if (!isAuthenticated) {
@@ -687,6 +1049,57 @@ export default function App() {
     selectedAlbum?.coverArt && client
       ? client.getCoverArtUrl(selectedAlbum.coverArt, 512)
       : null;
+  const selectedPlaylist = useMemo(
+    () => playlistsData.find((playlist) => playlist.id === selectedPlaylistId) ?? null,
+    [playlistsData, selectedPlaylistId],
+  );
+  const selectedPlaylistName = playlistDetailData?.name ?? selectedPlaylist?.name ?? "";
+  const selectedPlaylistCoverArt = playlistDetailData?.coverArt ?? selectedPlaylist?.coverArt;
+  const selectedPlaylistCoverUrl =
+    selectedPlaylistCoverArt && client
+      ? client.getCoverArtUrl(selectedPlaylistCoverArt, 512)
+      : null;
+  const selectedPlaylistSongs = playlistDetailData?.entry ?? [];
+  const selectedPlaylistQueue = useMemo(
+    () => (client ? selectedPlaylistSongs.map((song) => mapSongToTrackInfo(song, client)) : []),
+    [client, selectedPlaylistSongs],
+  );
+  const selectedPlaylistSongCount = playlistDetailData?.songCount ??
+    selectedPlaylist?.songCount ??
+    selectedPlaylistSongs.length;
+  const selectedPlaylistDurationSeconds = playlistDetailData?.duration ??
+    selectedPlaylist?.duration ??
+    selectedPlaylistSongs.reduce((total, song) => total + (song.duration ?? 0), 0);
+  const selectedPlaylistOwner = playlistDetailData?.owner ?? selectedPlaylist?.owner;
+  const selectedPlaylistComment = playlistDetailData?.comment ?? selectedPlaylist?.comment;
+  const selectedPlaylistUpdatedAtLabel = formatDateTime(
+    playlistDetailData?.changed ??
+      selectedPlaylist?.changed ??
+      playlistDetailData?.created ??
+      selectedPlaylist?.created,
+  );
+  const playlistCards = useMemo(
+    () =>
+      [...playlistsData].sort((a, b) => {
+        const aTimestamp = Date.parse(a.changed ?? a.created ?? "");
+        const bTimestamp = Date.parse(b.changed ?? b.created ?? "");
+        const aValid = Number.isFinite(aTimestamp);
+        const bValid = Number.isFinite(bTimestamp);
+
+        if (aValid && bValid && aTimestamp !== bTimestamp) {
+          return bTimestamp - aTimestamp;
+        }
+        if (aValid && !bValid) {
+          return -1;
+        }
+        if (!aValid && bValid) {
+          return 1;
+        }
+
+        return a.name.localeCompare(b.name);
+      }),
+    [playlistsData],
+  );
   const globalSearchAlbums = globalSearchData.albums;
   const globalSearchSongs = globalSearchData.songs;
   const suggestionAlbums = suggestionSearchData.albums;
@@ -1092,14 +1505,51 @@ export default function App() {
     setQueue(queue, startIndex);
     setPlaying(true);
   }, [client, lovedTracksData, setQueue, setPlaying]);
+  const handlePlayPlaylistSong = useCallback((songId: string) => {
+    if (selectedPlaylistQueue.length === 0) {
+      return;
+    }
+
+    const startIndex = selectedPlaylistQueue.findIndex((song) => song.id === songId);
+    if (startIndex < 0) {
+      return;
+    }
+
+    setQueue(selectedPlaylistQueue, startIndex);
+    setPlaying(true);
+  }, [selectedPlaylistQueue, setQueue, setPlaying]);
+  const handlePlayPlaylistAll = useCallback(() => {
+    if (selectedPlaylistQueue.length === 0) {
+      return;
+    }
+
+    setQueue(selectedPlaylistQueue, 0);
+    setPlaying(true);
+  }, [selectedPlaylistQueue, setQueue, setPlaying]);
+  const handleShufflePlaylist = useCallback(() => {
+    if (selectedPlaylistQueue.length === 0) {
+      return;
+    }
+
+    const shuffledQueue = shuffleArray(selectedPlaylistQueue);
+    setQueue(shuffledQueue, 0);
+    setPlaying(true);
+  }, [selectedPlaylistQueue, setQueue, setPlaying]);
 
   const albumColumns = useMemo(() => getAlbumColumns(viewportWidth), [viewportWidth]);
   const albumGridAlbums = useMemo(
-    () =>
-      activeNavSection === "recent-added"
-        ? [...filteredAlbums].sort((a, b) => b.createdAt - a.createdAt)
-        : filteredAlbums,
-    [activeNavSection, filteredAlbums],
+    () => {
+      if (activeNavSection === "recent-added") {
+        return recentPlayedAlbums;
+      }
+
+      if (activeNavSection === "for-you") {
+        return forYouExploreAlbums;
+      }
+
+      return filteredAlbums;
+    },
+    [activeNavSection, filteredAlbums, forYouExploreAlbums, recentPlayedAlbums],
   );
 
   const albumPageSize = useMemo(
@@ -1229,6 +1679,7 @@ export default function App() {
     genres: "流派",
     folders: "文件夹",
     "album-detail": "专辑详情",
+    "playlist-detail": "歌单详情",
     "artist-detail": "艺人详情",
     search: "全局搜索",
     playlists: "播放列表",
@@ -1236,8 +1687,8 @@ export default function App() {
 
   const viewDescriptionMap = {
     "for-you": "聚合推荐位与快捷入口，优先展示你最可能继续听的内容。",
-    discover: "浏览你的音乐库与专辑，点击底部播放栏左侧封面可展开正在播放。",
-    "recent-added": "按最近播放与新增顺序浏览专辑，快速续播。",
+    discover: "基于流派聚合推荐并过滤首页已展示内容，专注探索不重复的专辑。",
+    "recent-added": "按真实播放历史展示最近听过的专辑，便于快速回听。",
     albums: "专辑列表已接入分页与持续拉取，适合大音乐库浏览。",
     artists: "按专辑统计艺人，展示曲目规模与最近发行年份。",
     songs: "展示当前专辑曲目，支持分页查看与直接点选播放。",
@@ -1245,12 +1696,14 @@ export default function App() {
     genres: "按音乐风格聚合，快速切到你想听的类型。",
     folders: "显示服务器音乐目录，便于按底层文件结构浏览。",
     "album-detail": "展示专辑元数据并支持播放全部、打乱播放。",
+    "playlist-detail": "展示歌单元数据与完整歌曲列表，支持连续播放。",
     "artist-detail": "展示艺人聚合结果，支持查看专辑与按艺人播放歌曲。",
     search: "跨全库搜索专辑与歌曲，结果来自 Subsonic search3。",
-    playlists: "收藏歌单与新建歌单入口已预留，后续可扩展为真实列表管理。",
+    playlists: "展示服务器歌单并支持整单播放、打乱与单曲点播。",
   } as const;
 
   const isPlaylistsView = activeNavSection === "playlists";
+  const isPlaylistDetailView = activeNavSection === "playlist-detail";
   const isSearchView = activeNavSection === "search";
   const isAlbumDetailView = activeNavSection === "album-detail";
   const isArtistDetailView = activeNavSection === "artist-detail";
@@ -1263,8 +1716,8 @@ export default function App() {
   const isLovedTracksView = activeNavSection === "loved-tracks";
   const isGenresView = activeNavSection === "genres";
   const isFoldersView = activeNavSection === "folders";
-  const isAlbumCollectionView = isForYouView || isDiscoverView || isRecentAddedView || isAlbumsView;
-  const discoverFeaturedAlbum = discoverRecentAlbums[0] ?? null;
+  const isAlbumCollectionView = isForYouView || isRecentAddedView || isAlbumsView;
+  const discoverFeaturedAlbum = discoverRecommendedAlbums[0] ?? discoverCollectionAlbums[0] ?? null;
   const discoverFeaturedCoverUrl = discoverFeaturedAlbum
     ? getAlbumCoverUrl(discoverFeaturedAlbum.coverArt, 512)
     : null;
@@ -1274,10 +1727,14 @@ export default function App() {
   const isLibraryView = !isPlaylistsView && !isSearchView;
   const currentViewTitle = isArtistDetailView && normalizedSelectedArtistName
     ? `艺人详情 · ${normalizedSelectedArtistName}`
-    : viewTitleMap[activeNavSection];
+    : isPlaylistDetailView && selectedPlaylistName
+      ? `歌单详情 · ${selectedPlaylistName}`
+      : viewTitleMap[activeNavSection];
   const currentViewDescription = isArtistDetailView && normalizedSelectedArtistName
     ? `聚合 ${normalizedSelectedArtistName} 的专辑和歌曲结果，可直接播放与打开专辑详情。`
-    : viewDescriptionMap[activeNavSection];
+    : isPlaylistDetailView && selectedPlaylistName
+      ? `展示歌单「${selectedPlaylistName}」的完整歌曲列表，可直接播放与跳转专辑。`
+      : viewDescriptionMap[activeNavSection];
   const canGoBack = navHistory.index > 0;
   const canGoForward = navHistory.index < navHistory.stack.length - 1;
 
@@ -1409,6 +1866,10 @@ export default function App() {
     setSelectedAlbumId(albumId);
     handleNavigateSection("album-detail");
   }, [setSelectedAlbumId, handleNavigateSection]);
+  const handleOpenPlaylistDetail = useCallback((playlistId: string) => {
+    setSelectedPlaylistId(playlistId);
+    handleNavigateSection("playlist-detail");
+  }, [setSelectedPlaylistId, handleNavigateSection]);
   const handleOpenArtistDetail = useCallback((artistName: string) => {
     const normalized = artistName.trim();
     if (!normalized) {
@@ -1422,6 +1883,10 @@ export default function App() {
 
   const handleBackToAlbums = () => {
     handleNavigateSection("albums");
+  };
+
+  const handleBackToPlaylists = () => {
+    handleNavigateSection("playlists");
   };
 
   const handleBackToArtists = () => {
@@ -1548,7 +2013,20 @@ export default function App() {
               <Disc3 className="h-4 w-4" />
               <span className="text-xs tracking-[0.2em]">音乐视图</span>
             </div>
-            <h1 className="text-2xl font-semibold tracking-tight">{currentViewTitle}</h1>
+            <div className="flex flex-wrap items-center gap-2.5">
+              <h1 className="text-2xl font-semibold tracking-tight">{currentViewTitle}</h1>
+              {updateChecker.hasUpdate === true && updateChecker.latestVersion ? (
+                <a
+                  href={updateChecker.releaseUrl ?? "#"}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-1 rounded-full border border-[var(--accent-border)] bg-[var(--accent-soft)] px-2 py-0.5 text-[11px] font-medium text-[var(--accent-text)] transition-colors hover:opacity-85"
+                >
+                  <Download className="h-3 w-3" />
+                  v{updateChecker.latestVersion} 可更新
+                </a>
+              ) : null}
+            </div>
             <p className="mt-2 text-sm text-slate-600 dark:text-slate-300">
               {currentViewDescription}
             </p>
@@ -1571,14 +2049,80 @@ export default function App() {
         )}
 
         {isPlaylistsView && (
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-base">播放列表</CardTitle>
-            </CardHeader>
-            <CardContent className="text-sm text-slate-600 dark:text-slate-300">
-              播放列表功能即将完善，当前可先从“专辑”或“最近播放”中直接点歌播放。
-            </CardContent>
-          </Card>
+          <section className="space-y-4">
+            <div className="flex items-center gap-2">
+              <ListMusic className="h-4 w-4 text-slate-500" />
+              <h2 className="text-sm font-medium">歌单列表</h2>
+            </div>
+
+            {playlistsError ? (
+              <Card className="border-rose-200 bg-rose-50 dark:border-rose-900/40 dark:bg-rose-900/20">
+                <CardContent className="pt-4 text-sm text-slate-700 dark:text-slate-200">
+                  {playlistsErrorObj instanceof Error
+                    ? playlistsErrorObj.message
+                    : "歌单列表加载失败"}
+                </CardContent>
+              </Card>
+            ) : playlistsLoading ? (
+              <Card>
+                <CardContent className="flex h-24 items-center justify-center gap-2 text-sm text-slate-500 dark:text-slate-300">
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  正在加载歌单...
+                </CardContent>
+              </Card>
+            ) : playlistCards.length === 0 ? (
+              <Card>
+                <CardContent className="pt-5 text-sm text-slate-600 dark:text-slate-300">
+                  服务器暂无歌单，请先在 Navidrome/Subsonic 侧创建歌单。
+                </CardContent>
+              </Card>
+            ) : (
+              <Card>
+                <CardHeader className="pb-3">
+                  <CardTitle className="text-base">全部歌单 ({playlistCards.length})</CardTitle>
+                  <p className="text-xs text-slate-500 dark:text-slate-400">
+                    点击歌单进入详情页查看完整歌曲列表
+                  </p>
+                </CardHeader>
+                <CardContent className="space-y-2 p-3 pt-0">
+                  {playlistCards.map((playlist) => {
+                    const playlistUpdatedLabel = formatDateTime(playlist.changed ?? playlist.created);
+                    const playlistMeta = [
+                      `${playlist.songCount ?? 0} 首歌曲`,
+                      playlist.duration ? formatDuration(playlist.duration) : null,
+                      playlist.owner?.trim() || null,
+                      playlistUpdatedLabel ? `更新于 ${playlistUpdatedLabel}` : null,
+                    ]
+                      .filter(Boolean)
+                      .join(" · ");
+
+                    return (
+                      <button
+                        key={playlist.id}
+                        type="button"
+                        onClick={() => handleOpenPlaylistDetail(playlist.id)}
+                        className={cn(
+                          "w-full rounded-xl border px-3 py-3 text-left transition-colors",
+                          "border-slate-200 bg-white hover:border-[var(--accent-border)] hover:bg-[var(--accent-soft)] dark:border-slate-800 dark:bg-slate-900 dark:hover:border-[var(--accent-border)]",
+                          selectedPlaylistId === playlist.id &&
+                            "border-[var(--accent-border)] bg-[var(--accent-soft)]",
+                        )}
+                      >
+                        <p className="truncate text-sm font-medium text-slate-900 dark:text-slate-100">
+                          {playlist.name}
+                        </p>
+                        {playlistMeta ? (
+                          <p className="mt-1 truncate text-xs text-slate-500 dark:text-slate-400">
+                            {playlistMeta}
+                          </p>
+                        ) : null}
+                      </button>
+                    );
+                  })}
+                </CardContent>
+              </Card>
+            )}
+          </section>
         )}
 
         {isSearchView && (
@@ -1841,7 +2385,7 @@ export default function App() {
           <>
             {isAlbumCollectionView && !isAlbumDetailView && (
               <section className="space-y-5">
-                {(isForYouView || isDiscoverView) && (
+                {isForYouView && (
                   <>
                     <Card className="overflow-hidden border-[var(--accent-border)] bg-[linear-gradient(135deg,var(--accent-soft)_0%,rgba(59,130,246,0.1)_55%,rgba(15,23,42,0.03)_100%)] dark:border-[var(--accent-border)] dark:bg-[linear-gradient(135deg,rgba(5,46,22,0.55)_0%,rgba(17,24,39,0.45)_100%)]">
                       <CardContent className="p-5">
@@ -1902,11 +2446,11 @@ export default function App() {
                     <div className="grid gap-4 xl:grid-cols-2">
                       {[
                         {
-                          key: "recent",
-                          icon: Clock3,
-                          title: "最近添加",
-                          description: "按时间排序，快速进入刚同步到库里的专辑。",
-                          albums: discoverRecentAlbums,
+                          key: "recommended",
+                          icon: Music2,
+                          title: "智能推荐",
+                          description: "混合曲目规模、时长和每日轮换，让推荐不只停留在最近新增。",
+                          albums: discoverRecommendedAlbums,
                         },
                         {
                           key: "collection",
@@ -1989,9 +2533,7 @@ export default function App() {
                     <h2 className="text-sm font-medium">
                       {isForYouView
                         ? "推荐后继续探索"
-                        : isDiscoverView
-                          ? "全部专辑"
-                          : isRecentAddedView
+                        : isRecentAddedView
                             ? "最近播放专辑"
                             : "专辑列表"}
                     </h2>
@@ -2060,12 +2602,133 @@ export default function App() {
                         </div>
                       ) : (
                         <div className="flex h-24 items-center justify-center rounded-lg text-sm text-slate-500">
-                          没有匹配到专辑
+                          {isRecentAddedView ? "暂无最近播放，先播放几首歌后这里会出现记录" : "没有匹配到专辑"}
                         </div>
                       )}
                     </CardContent>
                   </Card>
                 </div>
+              </section>
+            )}
+
+            {isDiscoverView && !isAlbumDetailView && (
+              <section className="space-y-5">
+                {discoverGenreSections.length > 0 ? (
+                  <div className="space-y-4">
+                    {discoverGenreSections.map((section) => (
+                      <Card key={`discover-genre-${section.key}`}>
+                        <CardHeader>
+                          <CardTitle className="flex items-center gap-2 text-base">
+                            <Tags className="h-4 w-4 text-slate-500" />
+                            {section.genre}
+                          </CardTitle>
+                          <p className="text-xs text-slate-500 dark:text-slate-400">
+                            {section.albumCount} 张专辑 · {section.artistCount} 位艺人
+                            {section.yearRange ? ` · ${section.yearRange}` : ""}
+                          </p>
+                        </CardHeader>
+                        <CardContent className="p-3 pt-0">
+                          <div className="-mx-1 flex gap-3 overflow-x-auto px-1 pb-1">
+                            {section.albums.map((album) => {
+                              const coverUrl = getAlbumCoverUrl(album.coverArt, 384);
+                              const albumMeta = getAlbumSecondaryMeta(album);
+
+                              return (
+                                <button
+                                  key={`discover-${section.key}-${album.id}`}
+                                  type="button"
+                                  onClick={() => handleOpenAlbumDetail(album.id)}
+                                  className="w-40 shrink-0 overflow-hidden rounded-xl border border-slate-200 bg-white text-left transition-colors hover:border-[var(--accent-border)] dark:border-slate-800 dark:bg-slate-900"
+                                >
+                                  <div className="aspect-square overflow-hidden border-b border-slate-200 dark:border-slate-800">
+                                    {coverUrl ? (
+                                      <img
+                                        src={coverUrl}
+                                        alt={`${album.title} cover`}
+                                        className="h-full w-full object-cover"
+                                        loading="lazy"
+                                      />
+                                    ) : (
+                                      <div className="h-full w-full bg-[radial-gradient(circle_at_20%_20%,rgba(16,185,129,0.24),transparent_40%),radial-gradient(circle_at_80%_80%,rgba(59,130,246,0.2),transparent_42%)]" />
+                                    )}
+                                  </div>
+                                  <div className="p-3">
+                                    <p className="truncate text-sm font-medium">{album.title}</p>
+                                    <span
+                                      role="button"
+                                      tabIndex={0}
+                                      onClick={(event) => {
+                                        event.stopPropagation();
+                                        handleOpenArtistDetail(album.artist);
+                                      }}
+                                      onKeyDown={(event) => {
+                                        if (event.key === "Enter") {
+                                          event.stopPropagation();
+                                          handleOpenArtistDetail(album.artist);
+                                        }
+                                      }}
+                                      className="block truncate text-xs text-slate-500 dark:text-slate-400 transition-colors hover:text-[var(--accent-text)] hover:underline cursor-pointer"
+                                    >
+                                      {album.artist}
+                                    </span>
+                                    {albumMeta ? (
+                                      <p className="mt-1 truncate text-[0.68rem] text-slate-500 dark:text-slate-400">
+                                        {albumMeta}
+                                      </p>
+                                    ) : null}
+                                  </div>
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </CardContent>
+                      </Card>
+                    ))}
+                  </div>
+                ) : (
+                  <Card>
+                    <CardContent className="pt-5 text-sm text-slate-600 dark:text-slate-300">
+                      没有可展示的流派推荐，请先同步更多带流派标签的专辑。
+                    </CardContent>
+                  </Card>
+                )}
+
+                <Card>
+                  <CardHeader className="pb-3">
+                    <CardTitle className="flex items-center gap-2 text-base">
+                      <CalendarDays className="h-4 w-4 text-slate-500" />
+                      不重复探索池
+                    </CardTitle>
+                    <p className="text-xs text-slate-500 dark:text-slate-400">
+                      仅包含首页未出现过的专辑，按年代与更新时间混排。
+                    </p>
+                  </CardHeader>
+                  <CardContent className="p-3 pt-0">
+                    {discoverFreshAlbums.length > 0 ? (
+                      <div className="grid grid-cols-2 gap-4 md:grid-cols-3 xl:grid-cols-6">
+                        {discoverFreshAlbums.map((album) => {
+                          const coverUrl = getAlbumCoverUrl(album.coverArt, 384);
+
+                          return (
+                            <AlbumGridItem
+                              key={`discover-pool-${album.id}`}
+                              id={album.id}
+                              title={album.title}
+                              artist={album.artist}
+                              coverUrl={coverUrl}
+                              onClick={handleOpenAlbumDetail}
+                              onArtistClick={handleOpenArtistDetail}
+                            />
+                          );
+                        })}
+                      </div>
+                    ) : (
+                      <div className="flex h-24 items-center justify-center rounded-lg text-sm text-slate-500">
+                        没有可展示的去重专辑
+                      </div>
+                    )}
+                  </CardContent>
+                </Card>
               </section>
             )}
 
@@ -2411,6 +3074,209 @@ export default function App() {
               </section>
             )}
 
+            {isPlaylistDetailView && (
+              <section className="space-y-5">
+                <div className="flex items-center gap-3">
+                  <Button variant="outline" size="sm" onClick={handleBackToPlaylists}>
+                    <ArrowLeft className="h-4 w-4" />
+                    返回歌单列表
+                  </Button>
+                </div>
+
+                {!selectedPlaylist ? (
+                  <Card>
+                    <CardContent className="pt-5 text-sm text-slate-600 dark:text-slate-300">
+                      未找到歌单，请返回列表重新选择。
+                    </CardContent>
+                  </Card>
+                ) : (
+                  <>
+                    <div className="relative overflow-hidden rounded-2xl border border-slate-200/90 dark:border-slate-800/90">
+                      {selectedPlaylistCoverUrl && (
+                        <div
+                          aria-hidden
+                          className="pointer-events-none absolute inset-0 bg-cover bg-center opacity-20 blur-3xl saturate-150"
+                          style={{ backgroundImage: `url(${selectedPlaylistCoverUrl})` }}
+                        />
+                      )}
+                      <div className="relative p-6 sm:p-8">
+                        <div className="flex flex-col gap-6 sm:flex-row">
+                          {selectedPlaylistCoverUrl ? (
+                            <img
+                              src={selectedPlaylistCoverUrl}
+                              alt={`${selectedPlaylistName || "playlist"} cover`}
+                              className="h-52 w-52 shrink-0 rounded-2xl border border-white/30 object-cover shadow-2xl dark:border-slate-700/40"
+                            />
+                          ) : (
+                            <div className="h-52 w-52 shrink-0 rounded-2xl bg-[radial-gradient(circle_at_20%_20%,rgba(16,185,129,0.24),transparent_40%),radial-gradient(circle_at_80%_80%,rgba(59,130,246,0.2),transparent_42%)]" />
+                          )}
+
+                          <div className="flex min-w-0 flex-1 flex-col justify-end">
+                            <p className="text-[0.68rem] font-semibold uppercase tracking-[0.2em] text-slate-500 dark:text-slate-400">
+                              Playlist
+                            </p>
+                            <h2 className="mt-1 text-3xl font-bold tracking-tight">
+                              {selectedPlaylistName || "未命名歌单"}
+                            </h2>
+
+                            <p className="mt-3 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-sm text-slate-600 dark:text-slate-300">
+                              <span>{selectedPlaylistSongCount} 首</span>
+                              <span className="text-slate-400">·</span>
+                              <span>{formatDuration(selectedPlaylistDurationSeconds)}</span>
+                              {selectedPlaylistOwner ? (
+                                <>
+                                  <span className="text-slate-400">·</span>
+                                  <span>{selectedPlaylistOwner}</span>
+                                </>
+                              ) : null}
+                              {selectedPlaylistUpdatedAtLabel ? (
+                                <>
+                                  <span className="text-slate-400">·</span>
+                                  <span>更新于 {selectedPlaylistUpdatedAtLabel}</span>
+                                </>
+                              ) : null}
+                            </p>
+
+                            {selectedPlaylistComment ? (
+                              <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">
+                                {selectedPlaylistComment}
+                              </p>
+                            ) : null}
+
+                            <div className="mt-5 flex items-center gap-2">
+                              <Button
+                                onClick={handlePlayPlaylistAll}
+                                disabled={selectedPlaylistQueue.length === 0 || playlistDetailLoading}
+                              >
+                                播放全部
+                              </Button>
+                              <Button
+                                variant="outline"
+                                onClick={handleShufflePlaylist}
+                                disabled={selectedPlaylistQueue.length === 0 || playlistDetailLoading}
+                              >
+                                <Shuffle className="mr-2 h-4 w-4" />
+                                打乱播放
+                              </Button>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
+                    <section>
+                      <div className="mb-3 flex items-center gap-2">
+                        <ListMusic className="h-4 w-4 text-slate-500" />
+                        <h2 className="text-sm font-medium">
+                          歌曲列表 · {selectedPlaylistName || "当前歌单"}
+                        </h2>
+                      </div>
+
+                      <Card>
+                        <CardContent className="p-0">
+                          {playlistDetailError ? (
+                            <div className="rounded-b-xl bg-rose-50 p-4 text-sm text-rose-700 dark:bg-rose-900/20 dark:text-rose-200">
+                              {playlistDetailErrorObj instanceof Error
+                                ? playlistDetailErrorObj.message
+                                : "歌单详情加载失败"}
+                            </div>
+                          ) : playlistDetailLoading ? (
+                            <div className="flex h-24 items-center justify-center gap-2 text-sm text-slate-500 dark:text-slate-300">
+                              <Loader2 className="h-4 w-4 animate-spin" />
+                              正在加载歌单歌曲...
+                            </div>
+                          ) : selectedPlaylistSongs.length > 0 ? (
+                            <div className="overflow-x-auto pb-1 scrollbar-thin">
+                              <div className="min-w-[760px] overflow-hidden rounded-b-xl border-y border-slate-200/90 dark:border-slate-800/90">
+                                <div className="grid grid-cols-[44px_minmax(220px,2.3fr)_minmax(180px,1.45fr)_minmax(180px,1.55fr)_62px] items-center bg-slate-100/80 px-4 py-2 text-[0.68rem] font-semibold uppercase tracking-[0.12em] text-slate-500 dark:bg-slate-900/80 dark:text-slate-400">
+                                  <span>#</span>
+                                  <span>标题</span>
+                                  <span>艺人</span>
+                                  <span>专辑</span>
+                                  <span className="justify-self-end">时长</span>
+                                </div>
+                                <div className="divide-y divide-slate-200/70 dark:divide-slate-800/90">
+                                  {selectedPlaylistSongs.map((song, index) => (
+                                    <button
+                                      key={`playlist-song-${song.id}-${index}`}
+                                      type="button"
+                                      onClick={() => handlePlayPlaylistSong(song.id)}
+                                      className={cn(
+                                        "group grid w-full grid-cols-[44px_minmax(220px,2.3fr)_minmax(180px,1.45fr)_minmax(180px,1.55fr)_62px] items-center px-4 py-2 text-left outline-none transition-colors duration-150",
+                                        "hover:bg-slate-100/90 dark:hover:bg-slate-800/60",
+                                        currentTrackId === song.id
+                                          ? "bg-[var(--accent-soft)] text-[var(--accent-text)]"
+                                          : "text-slate-700 dark:text-slate-200",
+                                      )}
+                                    >
+                                      <span className={cn(
+                                        "text-sm font-semibold tabular-nums text-slate-500 transition-colors group-hover:text-slate-700 dark:text-slate-400 dark:group-hover:text-slate-200",
+                                        currentTrackId === song.id && "text-[var(--accent-solid)]",
+                                      )}>
+                                        {index + 1}
+                                      </span>
+                                      <span className="truncate text-sm font-medium">{song.title}</span>
+                                      <span
+                                        role="button"
+                                        tabIndex={0}
+                                        onClick={(event) => {
+                                          event.stopPropagation();
+                                          if (song.artist) handleOpenArtistDetail(song.artist);
+                                        }}
+                                        onKeyDown={(event) => {
+                                          if (event.key === "Enter") {
+                                            event.stopPropagation();
+                                            if (song.artist) handleOpenArtistDetail(song.artist);
+                                          }
+                                        }}
+                                        className="truncate text-xs text-slate-500 dark:text-slate-400 transition-colors hover:text-[var(--accent-text)] hover:underline cursor-pointer"
+                                      >
+                                        {song.artist ?? "Unknown Artist"}
+                                      </span>
+                                      {song.albumId ? (
+                                        <span
+                                          role="button"
+                                          tabIndex={0}
+                                          onClick={(event) => {
+                                            event.stopPropagation();
+                                            handleOpenAlbumDetail(song.albumId!);
+                                          }}
+                                          onKeyDown={(event) => {
+                                            if (event.key === "Enter") {
+                                              event.stopPropagation();
+                                              handleOpenAlbumDetail(song.albumId!);
+                                            }
+                                          }}
+                                          className="truncate text-xs text-slate-500 dark:text-slate-400 transition-colors hover:text-[var(--accent-text)] hover:underline cursor-pointer"
+                                        >
+                                          {song.album ?? "Unknown Album"}
+                                        </span>
+                                      ) : (
+                                        <span className="truncate text-xs text-slate-500 dark:text-slate-400">
+                                          {song.album ?? "Unknown Album"}
+                                        </span>
+                                      )}
+                                      <span className="justify-self-end text-[0.7rem] tabular-nums text-slate-500 dark:text-slate-400">
+                                        {formatTime(song.duration ?? 0)}
+                                      </span>
+                                    </button>
+                                  ))}
+                                </div>
+                              </div>
+                            </div>
+                          ) : (
+                            <div className="flex h-24 items-center justify-center text-sm text-slate-500">
+                              当前歌单没有可显示歌曲
+                            </div>
+                          )}
+                        </CardContent>
+                      </Card>
+                    </section>
+                  </>
+                )}
+              </section>
+            )}
+
             {isSongsView && (
               <section className="space-y-4">
                 <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -2597,10 +3463,10 @@ export default function App() {
                               onClick={() => {
                                 setSearchInput(genre.name);
                                 setSearchKeyword(genre.name);
-                                handleNavigateSection("search");
+                                handleNavigateSection("albums");
                               }}
                             >
-                              搜索流派
+                              查看流派
                             </Button>
                           </div>
                         ))}
@@ -2927,7 +3793,11 @@ export default function App() {
           onAlbumClick={handleOpenAlbumDetail}
         />
 
-        <SettingsPanel open={isSettingsPanelOpen} onClose={handleCloseSettingsPanel} />
+        <SettingsPanel
+          open={isSettingsPanelOpen}
+          onClose={handleCloseSettingsPanel}
+          updateChecker={updateChecker}
+        />
 
         <PlayerBar
           nowPlayingOpen={isNowPlayingSheetOpen}

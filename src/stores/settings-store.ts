@@ -79,6 +79,7 @@ export function resolveMaxBitrateKbps(quality: StreamQuality) {
 
 type SettingsState = {
   outputDeviceId: string;
+  audioPassthroughEnabled: boolean;
   preampGainDb: number;
   gaplessPlaybackEnabled: boolean;
   crossfadeEnabled: boolean;
@@ -109,6 +110,7 @@ type SettingsState = {
   playbackSpeed: number;
   fadeDurationSec: number;
   setOutputDeviceId: (deviceId: string) => void;
+  setAudioPassthroughEnabled: (enabled: boolean) => void;
   setPreampGainDb: (gain: number) => void;
   setGaplessPlaybackEnabled: (enabled: boolean) => void;
   setCrossfadeEnabled: (enabled: boolean) => void;
@@ -145,6 +147,7 @@ export const useSettingsStore = create<SettingsState>()(
   persist(
     (set) => ({
       outputDeviceId: "default",
+      audioPassthroughEnabled: false,
       preampGainDb: 0,
       gaplessPlaybackEnabled: true,
       crossfadeEnabled: false,
@@ -175,6 +178,7 @@ export const useSettingsStore = create<SettingsState>()(
       playbackSpeed: 1.0,
       fadeDurationSec: 0.2,
       setOutputDeviceId: (outputDeviceId) => set({ outputDeviceId }),
+      setAudioPassthroughEnabled: (audioPassthroughEnabled) => set({ audioPassthroughEnabled }),
       setPreampGainDb: (preampGainDb) =>
         set({ preampGainDb: clamp(preampGainDb, -12, 12) }),
       setGaplessPlaybackEnabled: (gaplessPlaybackEnabled) => set({ gaplessPlaybackEnabled }),
@@ -233,6 +237,7 @@ export const useSettingsStore = create<SettingsState>()(
       name: "otomusic-settings",
       partialize: (state) => ({
         outputDeviceId: state.outputDeviceId,
+        audioPassthroughEnabled: state.audioPassthroughEnabled,
         preampGainDb: state.preampGainDb,
         gaplessPlaybackEnabled: state.gaplessPlaybackEnabled,
         crossfadeEnabled: state.crossfadeEnabled,

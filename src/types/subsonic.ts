@@ -43,6 +43,19 @@ export type SubsonicMusicFolder = {
   name?: string;
 };
 
+export type SubsonicPlaylist = {
+  id: string;
+  name: string;
+  comment?: string;
+  owner?: string;
+  public?: boolean;
+  songCount?: number;
+  duration?: number;
+  created?: string;
+  changed?: string;
+  coverArt?: string;
+};
+
 export type SubsonicArtistInfo2 = {
   biography?: string;
   musicBrainzId?: string;

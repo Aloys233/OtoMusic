@@ -118,6 +118,7 @@ export function PlayerBar({
   const shuffle = usePlayerStore((state) => state.shuffle);
   const streamQuality = useSettingsStore((state) => state.streamQuality);
   const replayGainMode = useSettingsStore((state) => state.replayGainMode);
+  const audioPassthroughEnabled = useSettingsStore((state) => state.audioPassthroughEnabled);
 
   const setVolume = usePlayerStore((state) => state.setVolume);
   const setProgress = usePlayerStore((state) => state.setProgress);
@@ -182,6 +183,7 @@ export function PlayerBar({
     effectiveStreamUrl,
     isPlaying,
     replayGainMode,
+    audioPassthroughEnabled,
     setPlaying,
   ]);
 

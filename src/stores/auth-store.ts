@@ -2,6 +2,7 @@ import { create } from "zustand";
 import { persist } from "zustand/middleware";
 
 import { createSubsonicClient } from "@/lib/api/client";
+import { normalizeServerBaseUrl } from "@/lib/server-url";
 
 export type AuthSession = {
   baseUrl: string;
@@ -36,7 +37,7 @@ type AuthState = {
 
 function normalizeSession(session: AuthSession): AuthSession {
   return {
-    baseUrl: session.baseUrl.trim(),
+    baseUrl: normalizeServerBaseUrl(session.baseUrl),
     username: session.username.trim(),
     password: session.password,
   };
@@ -60,7 +61,16 @@ export const useAuthStore = create<AuthState>()(
       loginError: null,
       serverConfig: null,
       login: async (session) => {
-        const normalized = normalizeSession(session);
+        let normalized: AuthSession;
+        try {
+          normalized = normalizeSession(session);
+        } catch (error) {
+          set({
+            loginError: error instanceof Error ? error.message : "服务器地址格式不正确",
+            isLoggingIn: false,
+          });
+          return false;
+        }
 
         if (!normalized.baseUrl || !normalized.username || !normalized.password) {
           set({ loginError: "请完整填写地址、用户名和密码" });
@@ -73,12 +83,22 @@ export const useAuthStore = create<AuthState>()(
         const config = get().serverConfig;
         if (config) {
           for (const fallback of config.fallbackUrls) {
-            if (!urlsToTry.includes(fallback)) {
-              urlsToTry.push(fallback);
+            try {
+              const normalizedFallback = normalizeServerBaseUrl(fallback);
+              if (!urlsToTry.includes(normalizedFallback)) {
+                urlsToTry.push(normalizedFallback);
+              }
+            } catch {
+              // 跳过无效备用地址
             }
           }
-          if (!urlsToTry.includes(config.primaryUrl)) {
-            urlsToTry.push(config.primaryUrl);
+          try {
+            const normalizedPrimary = normalizeServerBaseUrl(config.primaryUrl);
+            if (!urlsToTry.includes(normalizedPrimary)) {
+              urlsToTry.push(normalizedPrimary);
+            }
+          } catch {
+            // 跳过无效主地址
           }
         }
 
@@ -118,11 +138,26 @@ export const useAuthStore = create<AuthState>()(
         return false;
       },
       saveServerConfig: (config) => {
+        let primaryUrl = "";
+        try {
+          primaryUrl = normalizeServerBaseUrl(config.primaryUrl);
+        } catch {
+          primaryUrl = config.primaryUrl.trim();
+        }
+
         set({
           serverConfig: {
             ...config,
-            primaryUrl: config.primaryUrl.trim(),
-            fallbackUrls: config.fallbackUrls.map((u) => u.trim()).filter(Boolean),
+            primaryUrl,
+            fallbackUrls: config.fallbackUrls
+              .map((u) => {
+                try {
+                  return normalizeServerBaseUrl(u);
+                } catch {
+                  return "";
+                }
+              })
+              .filter(Boolean),
             name: config.name.trim() || config.username.trim() || "服务器",
             username: config.username.trim(),
           },
@@ -132,7 +167,12 @@ export const useAuthStore = create<AuthState>()(
         set({ serverConfig: null });
       },
       addFallbackUrl: (url) => {
-        const trimmed = url.trim();
+        let trimmed = "";
+        try {
+          trimmed = normalizeServerBaseUrl(url);
+        } catch {
+          return;
+        }
         if (!trimmed) return;
         set((state) => {
           if (!state.serverConfig) return state;
@@ -160,19 +200,29 @@ export const useAuthStore = create<AuthState>()(
       switchActiveUrl: async (url) => {
         const state = get();
         if (!state.session) return false;
+        let normalizedUrl = "";
+        try {
+          normalizedUrl = normalizeServerBaseUrl(url);
+        } catch (error) {
+          set({
+            isLoggingIn: false,
+            loginError: error instanceof Error ? error.message : "服务器地址格式不正确",
+          });
+          return false;
+        }
 
         set({ isLoggingIn: true, loginError: null });
 
         try {
           const client = createSubsonicClient({
-            baseUrl: url,
+            baseUrl: normalizedUrl,
             username: state.session.username,
             password: state.session.password,
           });
           await client.ping();
 
           set({
-            session: { ...state.session, baseUrl: url },
+            session: { ...state.session, baseUrl: normalizedUrl },
             isLoggingIn: false,
             loginError: null,
           });

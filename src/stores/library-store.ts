@@ -11,6 +11,7 @@ export type LibraryNavSection =
   | "genres"
   | "folders"
   | "album-detail"
+  | "playlist-detail"
   | "artist-detail"
   | "search"
   | "playlists";

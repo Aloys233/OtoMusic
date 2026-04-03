@@ -8,6 +8,14 @@ type GlobalShortcutConfig = {
   nextTrack: string;
   previousTrack: string;
 };
+type MpvPlayPayload = {
+  url: string;
+  startSeconds?: number;
+  paused?: boolean;
+  volume?: number;
+  speed?: number;
+};
+type MpvPropertyName = "time-pos" | "duration" | "pause";
 
 const electronBridge = {
   sendWindowControl(channel: WindowControlChannel) {
@@ -29,6 +37,58 @@ const electronBridge = {
   },
   updateGlobalShortcuts(config: GlobalShortcutConfig) {
     ipcRenderer.send("global-shortcuts:update", config);
+  },
+  async mpvIsAvailable() {
+    return await ipcRenderer.invoke("mpv:is-available");
+  },
+  async mpvPlay(payload: MpvPlayPayload) {
+    await ipcRenderer.invoke("mpv:play", payload);
+  },
+  async mpvPause() {
+    await ipcRenderer.invoke("mpv:pause");
+  },
+  async mpvResume() {
+    await ipcRenderer.invoke("mpv:resume");
+  },
+  async mpvStop() {
+    await ipcRenderer.invoke("mpv:stop");
+  },
+  async mpvSeek(seconds: number) {
+    await ipcRenderer.invoke("mpv:seek", seconds);
+  },
+  async mpvSetVolume(volume: number) {
+    await ipcRenderer.invoke("mpv:set-volume", volume);
+  },
+  async mpvSetSpeed(speed: number) {
+    await ipcRenderer.invoke("mpv:set-speed", speed);
+  },
+  async mpvGetTimePos() {
+    return await ipcRenderer.invoke("mpv:get-time-pos");
+  },
+  async mpvGetDuration() {
+    return await ipcRenderer.invoke("mpv:get-duration");
+  },
+  onMpvEnded(handler: () => void) {
+    const listener = () => {
+      handler();
+    };
+
+    ipcRenderer.on("mpv-ended", listener);
+
+    return () => {
+      ipcRenderer.removeListener("mpv-ended", listener);
+    };
+  },
+  onMpvProperty(handler: (name: MpvPropertyName, value: unknown) => void) {
+    const listener = (_event: Electron.IpcRendererEvent, payload: { name: MpvPropertyName; value: unknown }) => {
+      handler(payload.name, payload.value);
+    };
+
+    ipcRenderer.on("mpv-property", listener);
+
+    return () => {
+      ipcRenderer.removeListener("mpv-property", listener);
+    };
   },
 };
 

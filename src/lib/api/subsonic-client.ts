@@ -6,6 +6,7 @@ import type {
   SubsonicArtistInfo2,
   SubsonicGenre,
   SubsonicMusicFolder,
+  SubsonicPlaylist,
   SubsonicResponseEnvelope,
   SubsonicSong,
 } from "@/types/subsonic";
@@ -460,6 +461,29 @@ export class SubsonicClient {
       options,
     );
     return response.musicFolders?.musicFolder ?? [];
+  }
+
+  async getPlaylists(options: RequestOptions = {}) {
+    const response = await this.get<{ playlists?: { playlist?: SubsonicPlaylist[] } }>(
+      "/rest/getPlaylists.view",
+      {},
+      options,
+    );
+    return response.playlists?.playlist ?? [];
+  }
+
+  async getPlaylist(id: string, options: RequestOptions = {}) {
+    const response = await this.get<{ playlist?: SubsonicPlaylist & { entry?: SubsonicSong[] } }>(
+      "/rest/getPlaylist.view",
+      { id },
+      options,
+    );
+    if (!response.playlist) {
+      const error = new Error(`Playlist not found: ${id}`) as SubsonicError;
+      error.code = 404;
+      throw error;
+    }
+    return { ...response.playlist, entry: response.playlist.entry ?? [] };
   }
 
   async getArtistInfo2(id: string, options: RequestOptions = {}) {

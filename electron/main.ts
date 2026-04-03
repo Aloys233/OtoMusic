@@ -3,12 +3,21 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { MpvController } from "./mpv-controller";
+
 type TrayAction = "show" | "play-pause" | "next" | "previous";
 type GlobalShortcutConfig = {
   enabled: boolean;
   playPause: string;
   nextTrack: string;
   previousTrack: string;
+};
+type MpvPlayPayload = {
+  url: string;
+  startSeconds?: number;
+  paused?: boolean;
+  volume?: number;
+  speed?: number;
 };
 
 const __filename = fileURLToPath(import.meta.url);
@@ -36,6 +45,7 @@ function resolveTrayIconPath() {
 let mainWindow: BrowserWindow | null = null;
 let tray: Tray | null = null;
 let isQuitting = false;
+const mpvController = new MpvController();
 let globalShortcutConfig: GlobalShortcutConfig = {
   enabled: true,
   playPause: "MediaPlayPause",
@@ -82,6 +92,21 @@ function showMainWindow() {
 }
 
 function setupIpc() {
+  mpvController.setEventHandlers({
+    onEnded: () => {
+      if (!mainWindow || mainWindow.isDestroyed()) {
+        return;
+      }
+      mainWindow.webContents.send("mpv-ended");
+    },
+    onProperty: (name, value) => {
+      if (!mainWindow || mainWindow.isDestroyed()) {
+        return;
+      }
+      mainWindow.webContents.send("mpv-property", { name, value });
+    },
+  });
+
   ipcMain.on("window-min", () => {
     mainWindow?.minimize();
   });
@@ -131,6 +156,46 @@ function setupIpc() {
         : "",
     };
     registerGlobalShortcuts();
+  });
+
+  ipcMain.handle("mpv:is-available", async () => {
+    return await mpvController.isAvailable();
+  });
+
+  ipcMain.handle("mpv:play", async (_event, payload: MpvPlayPayload) => {
+    await mpvController.play(payload);
+  });
+
+  ipcMain.handle("mpv:pause", async () => {
+    await mpvController.pause();
+  });
+
+  ipcMain.handle("mpv:resume", async () => {
+    await mpvController.resume();
+  });
+
+  ipcMain.handle("mpv:stop", async () => {
+    await mpvController.stop();
+  });
+
+  ipcMain.handle("mpv:seek", async (_event, seconds: number) => {
+    await mpvController.seek(seconds);
+  });
+
+  ipcMain.handle("mpv:set-volume", async (_event, volume: number) => {
+    await mpvController.setVolume(volume);
+  });
+
+  ipcMain.handle("mpv:set-speed", async (_event, speed: number) => {
+    await mpvController.setSpeed(speed);
+  });
+
+  ipcMain.handle("mpv:get-time-pos", async () => {
+    return await mpvController.getTimePos();
+  });
+
+  ipcMain.handle("mpv:get-duration", async () => {
+    return await mpvController.getDuration();
   });
 }
 
@@ -275,6 +340,7 @@ if (!gotLock) {
 
   app.on("before-quit", () => {
     isQuitting = true;
+    void mpvController.dispose();
   });
 
   app.on("will-quit", () => {

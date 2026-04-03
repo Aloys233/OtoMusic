@@ -3,6 +3,7 @@ import {
   CircleAlert,
   CircleCheckBig,
   Database,
+  Download,
   Info,
   Laptop,
   LogOut,
@@ -20,9 +21,11 @@ import {
 import { type CSSProperties, type ChangeEvent, useCallback, useEffect, useMemo, useState } from "react";
 
 import { useCacheManager } from "@/hooks/use-cache-manager";
+import type { UpdateCheckerResult } from "@/hooks/use-update-checker";
 import { createSubsonicClient } from "@/lib/api/client";
 import { audioEngine } from "@/lib/audio/AudioEngine";
 import { isElectronRuntime, updateGlobalShortcuts } from "@/lib/desktop-api";
+import { normalizeServerBaseUrl } from "@/lib/server-url";
 import { cn } from "@/lib/utils";
 import { useAuthStore } from "@/stores/auth-store";
 import {
@@ -42,6 +45,7 @@ import { Slider } from "../ui/slider";
 type SettingsPanelProps = {
   open: boolean;
   onClose: () => void;
+  updateChecker: UpdateCheckerResult;
 };
 
 const themeOptions: Array<{
@@ -133,12 +137,13 @@ function isElectronAvailable() {
   return isElectronRuntime();
 }
 
-export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
+export function SettingsPanel({ open, onClose, updateChecker }: SettingsPanelProps) {
   const mode = useThemeStore((state) => state.mode);
   const resolvedMode = useThemeStore((state) => state.resolvedMode);
   const setMode = useThemeStore((state) => state.setMode);
 
   const outputDeviceId = useSettingsStore((state) => state.outputDeviceId);
+  const audioPassthroughEnabled = useSettingsStore((state) => state.audioPassthroughEnabled);
   const preampGainDb = useSettingsStore((state) => state.preampGainDb);
   const gaplessPlaybackEnabled = useSettingsStore((state) => state.gaplessPlaybackEnabled);
   const crossfadeEnabled = useSettingsStore((state) => state.crossfadeEnabled);
@@ -172,6 +177,7 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
   const fadeDurationSec = useSettingsStore((state) => state.fadeDurationSec);
 
   const setOutputDeviceId = useSettingsStore((state) => state.setOutputDeviceId);
+  const setAudioPassthroughEnabled = useSettingsStore((state) => state.setAudioPassthroughEnabled);
   const setPreampGainDb = useSettingsStore((state) => state.setPreampGainDb);
   const setGaplessPlaybackEnabled = useSettingsStore((state) => state.setGaplessPlaybackEnabled);
   const setCrossfadeEnabled = useSettingsStore((state) => state.setCrossfadeEnabled);
@@ -291,6 +297,12 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
       setScanError(error instanceof Error ? error.message : "读取扫描状态失败");
     }
   }, [isAuthenticated, scanClient]);
+
+  useEffect(() => {
+    void audioEngine.setPassthroughEnabled(audioPassthroughEnabled).catch(() => {
+      // 忽略模式切换失败，避免设置面板交互中断。
+    });
+  }, [audioPassthroughEnabled]);
 
   useEffect(() => {
     audioEngine.setPreampGainDb(preampGainDb);
@@ -464,20 +476,22 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
   };
 
   const handleAddFallbackUrl = () => {
-    const trimmed = fallbackDraft.trim();
-    if (!trimmed) {
-      setFallbackError("请输入备用地址");
+    let normalizedUrl = "";
+    try {
+      normalizedUrl = normalizeServerBaseUrl(fallbackDraft);
+    } catch (error) {
+      setFallbackError(error instanceof Error ? error.message : "备用地址格式不正确");
       return;
     }
-    if (serverConfig?.primaryUrl === trimmed) {
+    if (serverConfig?.primaryUrl === normalizedUrl) {
       setFallbackError("备用地址不能与主地址相同");
       return;
     }
-    if (serverConfig?.fallbackUrls.includes(trimmed)) {
+    if (serverConfig?.fallbackUrls.includes(normalizedUrl)) {
       setFallbackError("该备用地址已存在");
       return;
     }
-    addFallbackUrl(trimmed);
+    addFallbackUrl(normalizedUrl);
     setFallbackDraft("");
     setFallbackError(null);
   };
@@ -538,9 +552,22 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
               style={noDragRegionStyle}
             >
               <header className="flex items-center justify-between border-b border-slate-200/70 px-4 py-3 dark:border-slate-800/70">
-                <div>
-                  <p className="text-xs uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">Settings</p>
-                  <h2 className="text-lg font-semibold">偏好设置</h2>
+                <div className="flex items-center gap-3">
+                  <div>
+                    <p className="text-xs uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">Settings</p>
+                    <h2 className="text-lg font-semibold">偏好设置</h2>
+                  </div>
+                  {updateChecker.hasUpdate === true && updateChecker.latestVersion ? (
+                    <a
+                      href={updateChecker.releaseUrl ?? "#"}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-1.5 rounded-full border border-[var(--accent-border)] bg-[var(--accent-soft)] px-2.5 py-1 text-[11px] font-medium text-[var(--accent-text)] transition-colors hover:opacity-85"
+                    >
+                      <Download className="h-3 w-3" />
+                      v{updateChecker.latestVersion} 可用
+                    </a>
+                  ) : null}
                 </div>
                 <Button size="icon" variant="ghost" aria-label="close-settings" onClick={onClose}>
                   <X className="h-4 w-4" />
@@ -743,6 +770,19 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                       )}
                     </div>
 
+                    <ToggleRow
+                      label="音频直通 (Bypass DSP)"
+                      description="绕过 ReplayGain、播放增益和图形均衡器"
+                      enabled={audioPassthroughEnabled}
+                      onChange={setAudioPassthroughEnabled}
+                    />
+
+                    {audioPassthroughEnabled ? (
+                      <p className="rounded-xl border border-sky-200/80 bg-sky-50 px-3 py-2 text-xs text-sky-700 dark:border-sky-900/60 dark:bg-sky-950/35 dark:text-sky-200">
+                        当前处于直通模式：下方 DSP 相关参数会被绕过。
+                      </p>
+                    ) : null}
+
                     <div>
                       <div className="mb-2 flex items-center justify-between">
                         <p className="text-xs font-medium text-slate-600 dark:text-slate-300">播放增益</p>
@@ -752,7 +792,14 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                         </span>
                       </div>
 
-                      <Slider value={[preampGainDb]} min={-12} max={12} step={0.5} onValueChange={handlePreampChange} />
+                      <Slider
+                        value={[preampGainDb]}
+                        min={-12}
+                        max={12}
+                        step={0.5}
+                        onValueChange={handlePreampChange}
+                        disabled={audioPassthroughEnabled}
+                      />
                     </div>
 
                     <div className="grid grid-cols-3 gap-2">
@@ -813,15 +860,17 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                           <button
                             type="button"
                             onClick={resetEqualizer}
-                            className="rounded-md px-1.5 py-0.5 text-[11px] transition-colors hover:bg-slate-200/80 dark:hover:bg-slate-800"
+                            disabled={audioPassthroughEnabled}
+                            className="rounded-md px-1.5 py-0.5 text-[11px] transition-colors hover:bg-slate-200/80 disabled:cursor-not-allowed disabled:opacity-55 dark:hover:bg-slate-800"
                           >
                             重置
                           </button>
                           <button
                             type="button"
                             onClick={() => setEqualizerEnabled(!equalizerEnabled)}
+                            disabled={audioPassthroughEnabled}
                             className={cn(
-                              "h-7 min-w-[52px] rounded-full border px-2 text-xs font-medium transition-colors",
+                              "h-7 min-w-[52px] rounded-full border px-2 text-xs font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-55",
                               equalizerEnabled
                                 ? "border-[var(--accent-border)] bg-[var(--accent-soft)] text-[var(--accent-text)]"
                                 : "border-slate-300 bg-slate-100 text-slate-600 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300",
@@ -838,8 +887,9 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                             key={preset}
                             type="button"
                             onClick={() => setEqualizerPreset(preset)}
+                            disabled={audioPassthroughEnabled}
                             className={cn(
-                              "rounded-lg border px-1.5 py-1 text-[10px] uppercase transition-colors",
+                              "rounded-lg border px-1.5 py-1 text-[10px] uppercase transition-colors disabled:cursor-not-allowed disabled:opacity-55",
                               equalizerPreset === preset
                                 ? "border-[var(--accent-border)] bg-[var(--accent-soft)] text-[var(--accent-text)]"
                                 : "border-slate-200 text-slate-600 dark:border-slate-700 dark:text-slate-300",
@@ -864,6 +914,7 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                                 max={12}
                                 step={0.5}
                                 onValueChange={(value) => setEqualizerBand(index, value[0] ?? 0)}
+                                disabled={audioPassthroughEnabled}
                               />
                               <span className="text-right text-[11px] tabular-nums text-slate-600 dark:text-slate-300">
                                 {bandValue > 0 ? "+" : ""}
@@ -887,8 +938,9 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                               key={option.value}
                               type="button"
                               onClick={() => setReplayGainMode(option.value)}
+                              disabled={audioPassthroughEnabled}
                               className={cn(
-                                "rounded-xl border px-2 py-2 text-center text-xs transition-colors",
+                                "rounded-xl border px-2 py-2 text-center text-xs transition-colors disabled:cursor-not-allowed disabled:opacity-55",
                                 selected
                                   ? "border-[var(--accent-border)] bg-[var(--accent-soft)] text-[var(--accent-text)]"
                                   : "border-slate-200 text-slate-600 dark:border-slate-700 dark:text-slate-300",
@@ -1239,10 +1291,20 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                   </div>
 
                   <div className="space-y-2 text-xs text-slate-600 dark:text-slate-300">
-                    <p className="flex items-center justify-between">
+                    <div className="flex items-center justify-between">
                       <span>版本</span>
-                      <span className="font-medium text-slate-800 dark:text-slate-100">v{__APP_VERSION__}</span>
-                    </p>
+                      <div className="flex items-center gap-2">
+                        <span className="font-medium text-slate-800 dark:text-slate-100">v{__APP_VERSION__}</span>
+                        <button
+                          type="button"
+                          onClick={() => { void updateChecker.checkForUpdate(); }}
+                          disabled={updateChecker.isChecking}
+                          className="rounded-md border border-slate-200 px-1.5 py-0.5 text-[11px] transition-colors hover:bg-slate-100 disabled:opacity-50 dark:border-slate-700 dark:hover:bg-slate-800"
+                        >
+                          {updateChecker.isChecking ? "检查中..." : updateChecker.hasUpdate === false ? "已是最新" : "检查更新"}
+                        </button>
+                      </div>
+                    </div>
                     <p className="flex items-center justify-between">
                       <span>连接状态</span>
                       <span
