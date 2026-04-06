@@ -26,6 +26,9 @@ export type SubsonicSong = {
   contentType?: string;
   suffix?: string;
   bitRate?: number;
+  bitDepth?: number;
+  sampleRate?: number;
+  samplingRate?: number;
   path?: string;
   replayGainTrackGain?: number | string;
   replayGainAlbumGain?: number | string;

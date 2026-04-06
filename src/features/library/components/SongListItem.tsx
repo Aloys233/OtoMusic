@@ -27,7 +27,7 @@ export const SongListItem = React.memo(({
       type="button"
       onClick={() => onClick(id)}
       className={cn(
-        "song-list-item group mb-1 flex h-12 w-full items-center justify-between rounded-lg px-3 text-left transition-colors duration-200 outline-none",
+        "song-list-item group mb-1 flex h-12 w-full items-center justify-between rounded-lg px-3 text-left outline-none transition-colors duration-320 ease-in-out",
         "hover:bg-slate-200/50 dark:hover:bg-slate-800/60",
         isPlaying ? "bg-[var(--accent-soft)] text-[var(--accent-text)]" : "text-slate-700 dark:text-slate-200",
       )}

@@ -535,7 +535,7 @@ export function SettingsPanel({ open, onClose, updateChecker }: SettingsPanelPro
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            transition={{ duration: 0.2 }}
+            transition={{ duration: 0.16, ease: "easeOut" }}
             className="absolute inset-0 bg-slate-950/45 backdrop-blur-[3px]"
           />
 
@@ -547,7 +547,7 @@ export function SettingsPanel({ open, onClose, updateChecker }: SettingsPanelPro
               initial={{ opacity: 0, y: 18, scale: 0.985 }}
               animate={{ opacity: 1, y: 0, scale: 1 }}
               exit={{ opacity: 0, y: 12, scale: 0.985 }}
-              transition={{ duration: 0.24, ease: "easeOut" }}
+              transition={{ type: "spring", stiffness: 260, damping: 20 }}
               className="flex h-[min(88vh,980px)] w-full max-w-5xl flex-col overflow-hidden rounded-2xl border border-slate-200/80 bg-white/95 shadow-2xl backdrop-blur dark:border-slate-800/80 dark:bg-slate-950/95"
               style={noDragRegionStyle}
             >

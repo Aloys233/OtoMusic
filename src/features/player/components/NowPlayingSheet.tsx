@@ -1,5 +1,6 @@
 import { AnimatePresence, motion } from "framer-motion";
 import {
+  AudioLines,
   ListMusic,
   Loader2,
   Music4,
@@ -14,7 +15,7 @@ import {
 } from "lucide-react";
 import {
   type CSSProperties,
-  type MouseEvent,
+  type PointerEvent,
   useCallback,
   useEffect,
   useRef,
@@ -27,6 +28,7 @@ import { isElectronRuntime } from "@/lib/desktop-api";
 import { useDominantColor } from "@/hooks/use-dominant-color";
 import { cn } from "@/lib/utils";
 import { usePlayerStore, type TrackInfo } from "@/stores/player-store";
+import { resolveAudioQuality } from "@/features/player/utils/audio-quality";
 
 import { AppleMusicLyrics } from "./AppleMusicLyrics";
 
@@ -114,9 +116,11 @@ export function NowPlayingSheet({
   const toggleShuffle = usePlayerStore((s) => s.toggleShuffle);
 
   // Progress bar refs for direct DOM manipulation
+  const seekBarRef = useRef<HTMLButtonElement>(null);
   const fillRef = useRef<HTMLSpanElement>(null);
-  const thumbRef = useRef<HTMLSpanElement>(null);
   const timeRef = useRef<HTMLSpanElement>(null);
+  const isSeekingRef = useRef(false);
+  const seekPreviewSecondsRef = useRef<number | null>(null);
 
   const duration = Math.max(1, currentTrack?.duration ?? 1);
 
@@ -149,48 +153,110 @@ export function NowPlayingSheet({
     setRepeatMode(repeatModeMap[repeatMode]);
   }, [repeatMode, setRepeatMode]);
 
-  const handleSeek = useCallback(
-    (event: MouseEvent<HTMLButtonElement>) => {
-      if (!currentTrack?.streamUrl) return;
-      const bounds = event.currentTarget.getBoundingClientRect();
-      if (bounds.width <= 0) return;
-      const ratio = Math.min(1, Math.max(0, (event.clientX - bounds.left) / bounds.width));
-      const seconds = ratio * duration;
-      setProgress(seconds);
-      void audioEngine.seek(seconds);
-      const pct = (seconds / duration) * 100;
+  const paintSeekProgress = useCallback(
+    (seconds: number) => {
+      const safeSeconds = Math.min(Math.max(0, seconds), duration);
+      const pct = (safeSeconds / duration) * 100;
       if (fillRef.current) fillRef.current.style.width = `${pct}%`;
-      if (thumbRef.current) thumbRef.current.style.left = `calc(${pct}% - 5px)`;
-      if (timeRef.current) timeRef.current.textContent = formatTime(seconds);
+      if (timeRef.current) timeRef.current.textContent = formatTime(safeSeconds);
     },
-    [currentTrack?.streamUrl, duration, setProgress],
+    [duration],
   );
+
+  const resolveSeekSecondsFromClientX = useCallback(
+    (clientX: number) => {
+      const seekBar = seekBarRef.current;
+      if (!seekBar) return null;
+      const bounds = seekBar.getBoundingClientRect();
+      if (bounds.width <= 0) return null;
+      const ratio = Math.min(1, Math.max(0, (clientX - bounds.left) / bounds.width));
+      return ratio * duration;
+    },
+    [duration],
+  );
+
+  const commitSeek = useCallback(
+    (seconds: number) => {
+      const safeSeconds = Math.min(Math.max(0, seconds), duration);
+      setProgress(safeSeconds);
+      void audioEngine.seek(safeSeconds);
+      paintSeekProgress(safeSeconds);
+    },
+    [duration, paintSeekProgress, setProgress],
+  );
+
+  const handleSeekPointerDown = useCallback(
+    (event: PointerEvent<HTMLButtonElement>) => {
+      if (!currentTrack?.streamUrl) return;
+      if (event.pointerType === "mouse" && event.button !== 0) return;
+
+      event.currentTarget.setPointerCapture(event.pointerId);
+      isSeekingRef.current = true;
+
+      const seconds = resolveSeekSecondsFromClientX(event.clientX);
+      if (seconds === null) return;
+      seekPreviewSecondsRef.current = seconds;
+      paintSeekProgress(seconds);
+    },
+    [currentTrack?.streamUrl, paintSeekProgress, resolveSeekSecondsFromClientX],
+  );
+
+  const handleSeekPointerMove = useCallback(
+    (event: PointerEvent<HTMLButtonElement>) => {
+      if (!isSeekingRef.current) return;
+      const seconds = resolveSeekSecondsFromClientX(event.clientX);
+      if (seconds === null) return;
+      seekPreviewSecondsRef.current = seconds;
+      paintSeekProgress(seconds);
+    },
+    [paintSeekProgress, resolveSeekSecondsFromClientX],
+  );
+
+  const handleSeekPointerUp = useCallback(
+    (event: PointerEvent<HTMLButtonElement>) => {
+      if (!isSeekingRef.current) return;
+      isSeekingRef.current = false;
+      if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+        event.currentTarget.releasePointerCapture(event.pointerId);
+      }
+
+      const seconds = seekPreviewSecondsRef.current;
+      seekPreviewSecondsRef.current = null;
+      if (seconds === null || !currentTrack?.streamUrl) return;
+      commitSeek(seconds);
+    },
+    [commitSeek, currentTrack?.streamUrl],
+  );
+
+  const handleSeekPointerCancel = useCallback(() => {
+    isSeekingRef.current = false;
+    seekPreviewSecondsRef.current = null;
+  }, []);
 
   // RAF loop for smooth progress updates
   useEffect(() => {
     if (!isPlaying || !open) return;
     let frameId = 0;
     const tick = () => {
+      if (isSeekingRef.current) {
+        frameId = requestAnimationFrame(tick);
+        return;
+      }
+
       const t = Math.min(audioEngine.getCurrentTime(), duration);
-      const pct = (t / duration) * 100;
-      if (fillRef.current) fillRef.current.style.width = `${pct}%`;
-      if (thumbRef.current) thumbRef.current.style.left = `calc(${pct}% - 5px)`;
-      if (timeRef.current) timeRef.current.textContent = formatTime(t);
+      paintSeekProgress(t);
       frameId = requestAnimationFrame(tick);
     };
     frameId = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(frameId);
-  }, [isPlaying, open, duration]);
+  }, [duration, isPlaying, open, paintSeekProgress]);
 
   // Reset progress display on track change
   useEffect(() => {
     if (!open) return;
     const t = Math.min(audioEngine.getCurrentTime(), duration);
-    const pct = (t / duration) * 100;
-    if (fillRef.current) fillRef.current.style.width = `${pct}%`;
-    if (thumbRef.current) thumbRef.current.style.left = `calc(${pct}% - 5px)`;
-    if (timeRef.current) timeRef.current.textContent = formatTime(t);
-  }, [currentTrack?.id, duration, open]);
+    paintSeekProgress(t);
+  }, [currentTrack?.id, duration, open, paintSeekProgress]);
 
   useEffect(() => {
     if (!open) {
@@ -229,8 +295,14 @@ export function NowPlayingSheet({
     };
   }, [currentHighResStatus, hasDedicatedHighResCover, highResCoverUrl, open]);
 
+  const audioQuality = currentTrack
+    ? resolveAudioQuality({
+        suffix: currentTrack.suffix,
+        bitDepth: currentTrack.bitDepth,
+        sampleRate: currentTrack.sampleRate,
+      })
+    : null;
   const infoChips: string[] = [];
-  if (currentTrack?.suffix) infoChips.push(currentTrack.suffix.toUpperCase());
   if (currentTrack?.bitRate) infoChips.push(`${currentTrack.bitRate} kbps`);
   if (currentTrack?.duration) infoChips.push(formatTime(currentTrack.duration));
 
@@ -244,7 +316,7 @@ export function NowPlayingSheet({
       initial={{ y: "105%" }}
       animate={{ y: 0 }}
       exit={{ y: "105%" }}
-      transition={{ duration: 0.36, ease: [0.22, 1, 0.36, 1] }}
+      transition={{ duration: 0.24, ease: [0.22, 1, 0.36, 1] }}
       className="absolute inset-0 z-[60] overflow-hidden bg-black"
     >
       {/* Background layers */}
@@ -403,21 +475,37 @@ export function NowPlayingSheet({
                     0:00
                   </span>
                   <button
+                    ref={seekBarRef}
                     type="button"
                     aria-label="seek-progress"
+                    data-press-animation="off"
                     disabled={!currentTrack.streamUrl}
-                    onClick={handleSeek}
-                    className="relative h-4 flex-1 cursor-pointer disabled:cursor-not-allowed"
+                    onPointerDown={handleSeekPointerDown}
+                    onPointerMove={handleSeekPointerMove}
+                    onPointerUp={handleSeekPointerUp}
+                    onPointerCancel={handleSeekPointerCancel}
+                    className="relative h-5 flex-1 cursor-pointer disabled:cursor-not-allowed"
                   >
-                    <span className="absolute inset-x-0 top-1/2 h-1 -translate-y-1/2 rounded-full bg-white/25" />
+                    <span className="absolute inset-x-0 top-1/2 h-2 -translate-y-1/2 rounded-full bg-white/22 shadow-[inset_0_0_0_1px_rgba(255,255,255,0.08)]" />
                     <span
                       ref={fillRef}
-                      className="absolute left-0 top-1/2 h-1 -translate-y-1/2 rounded-full bg-white/90"
-                    />
-                    <span
-                      ref={thumbRef}
-                      className="absolute top-1/2 h-2.5 w-2.5 -translate-y-1/2 rounded-full bg-white shadow-sm"
-                    />
+                      className="absolute left-0 top-1/2 z-[1] h-2 -translate-y-1/2 overflow-visible rounded-full bg-white"
+                      style={{ width: "0%" }}
+                    >
+                      <motion.span
+                        className="pointer-events-none absolute inset-y-0 right-2 z-[2] w-10 bg-[linear-gradient(90deg,rgba(255,255,255,0)_0%,rgba(255,255,255,0.14)_58%,rgba(255,255,255,0.68)_100%)]"
+                        animate={{ opacity: [0.5, 0.66, 0.5] }}
+                        transition={{ duration: 2.1, repeat: Number.POSITIVE_INFINITY, ease: "easeInOut" }}
+                      />
+                      <span className="pointer-events-none absolute inset-y-0 right-0 z-[3] w-3 rounded-full bg-white" />
+                      <span className="pointer-events-none absolute right-0 top-1/2 z-[4] h-2 w-3 -translate-y-1/2">
+                        <motion.span
+                          className="block h-full w-full rounded-full shadow-[0_0_7px_rgba(255,255,255,0.9),0_0_12px_rgba(255,255,255,0.56)]"
+                          animate={{ opacity: [0.72, 0.9, 0.72] }}
+                          transition={{ duration: 2.1, repeat: Number.POSITIVE_INFINITY, ease: "easeInOut" }}
+                        />
+                      </span>
+                    </span>
                   </button>
                   <span className="w-9 text-[11px] tabular-nums text-white/60">
                     {formatTime(duration)}
@@ -425,17 +513,17 @@ export function NowPlayingSheet({
                 </div>
 
                 {/* Control buttons */}
-                <div className="flex items-center gap-5">
+                <div className="mx-auto flex items-center gap-2.5">
                   <button
                     type="button"
                     aria-label="shuffle"
                     onClick={toggleShuffle}
                     disabled={queue.length <= 1}
                     className={cn(
-                      "inline-flex h-10 w-10 items-center justify-center rounded-full transition-all disabled:opacity-30",
+                      "relative inline-flex h-10 w-10 items-center justify-center rounded-full transition-[transform,color,opacity] duration-[120ms] ease-out active:scale-[0.93] disabled:opacity-30",
                       shuffle
-                        ? "text-white bg-white/20 shadow-[inset_0_1px_0_rgba(255,255,255,0.15)]"
-                        : "text-white/55 hover:text-white/80",
+                        ? "text-[var(--accent-solid)]"
+                        : "text-white/78 hover:text-white",
                     )}
                   >
                     <Shuffle className="h-[18px] w-[18px]" />
@@ -445,21 +533,21 @@ export function NowPlayingSheet({
                     aria-label="previous"
                     onClick={handlePlayPrevious}
                     disabled={queue.length === 0}
-                    className="inline-flex h-11 w-11 items-center justify-center rounded-full text-white/85 transition-all hover:text-white hover:bg-white/10 active:scale-90 disabled:opacity-30"
+                    className="inline-flex h-11 w-11 items-center justify-center rounded-full text-white/92 transition-[transform,color,opacity] duration-[120ms] ease-out hover:text-white active:scale-[0.93] disabled:opacity-30"
                   >
-                    <SkipBack className="h-[22px] w-[22px] fill-current" />
+                    <SkipBack className="h-[20px] w-[20px] fill-current" />
                   </button>
                   <button
                     type="button"
                     aria-label="play-pause"
                     onClick={() => void handleTogglePlay()}
                     disabled={!currentTrack.streamUrl}
-                    className="group relative inline-flex h-[56px] w-[56px] items-center justify-center rounded-full bg-white/95 text-black/85 shadow-[0_4px_24px_rgba(0,0,0,0.3),inset_0_1px_0_rgba(255,255,255,0.9)] backdrop-blur-sm transition-all duration-200 hover:bg-white hover:shadow-[0_6px_32px_rgba(0,0,0,0.35),inset_0_1px_0_rgba(255,255,255,1)] hover:scale-105 active:scale-[0.92] active:shadow-[0_2px_12px_rgba(0,0,0,0.25)] disabled:opacity-30"
+                    className="inline-flex h-[52px] w-[52px] items-center justify-center rounded-full bg-white text-black/90 shadow-[0_5px_16px_rgba(0,0,0,0.3)] transition-[transform,background-color,box-shadow,opacity] duration-[120ms] ease-out hover:bg-white/95 active:scale-[0.9] active:shadow-[0_2px_8px_rgba(0,0,0,0.22)] disabled:opacity-30"
                   >
                     {isPlaying ? (
-                      <Pause className="h-6 w-6 fill-current" />
+                      <Pause className="h-[18px] w-[18px] fill-current" />
                     ) : (
-                      <Play className="h-6 w-6 translate-x-[1.5px] fill-current" />
+                      <Play className="h-[18px] w-[18px] translate-x-[1px] fill-current" />
                     )}
                   </button>
                   <button
@@ -467,31 +555,44 @@ export function NowPlayingSheet({
                     aria-label="next"
                     onClick={handlePlayNext}
                     disabled={queue.length === 0}
-                    className="inline-flex h-11 w-11 items-center justify-center rounded-full text-white/85 transition-all hover:text-white hover:bg-white/10 active:scale-90 disabled:opacity-30"
+                    className="inline-flex h-11 w-11 items-center justify-center rounded-full text-white/92 transition-[transform,color,opacity] duration-[120ms] ease-out hover:text-white active:scale-[0.93] disabled:opacity-30"
                   >
-                    <SkipForward className="h-[22px] w-[22px] fill-current" />
+                    <SkipForward className="h-[20px] w-[20px] fill-current" />
                   </button>
                   <button
                     type="button"
                     aria-label="repeat"
                     onClick={handleRepeatToggle}
                     className={cn(
-                      "inline-flex h-10 w-10 items-center justify-center rounded-full transition-all",
+                      "inline-flex h-10 w-10 items-center justify-center rounded-full transition-[transform,color,opacity] duration-[120ms] ease-out active:scale-[0.93]",
                       repeatMode !== "off"
-                        ? "text-white bg-white/20 shadow-[inset_0_1px_0_rgba(255,255,255,0.15)]"
-                        : "text-white/55 hover:text-white/80",
+                        ? "text-[var(--accent-solid)]"
+                        : "text-white/78 hover:text-white",
                     )}
                   >
-                    {repeatMode === "one" ? <Repeat1 className="h-[18px] w-[18px]" /> : <Repeat2 className="h-[18px] w-[18px]" />}
+                    {repeatMode === "one"
+                      ? <Repeat1 className="h-[18px] w-[18px]" />
+                      : <Repeat2 className="h-[18px] w-[18px]" />}
                   </button>
                 </div>
 
                 {/* Song info chips */}
-                {infoChips.length > 0 ? (
+                {audioQuality || infoChips.length > 0 ? (
                   <div className="flex flex-wrap items-center justify-center gap-2">
-                    {infoChips.map((chip) => (
+                    {audioQuality ? (
                       <span
-                        key={chip}
+                        className="inline-flex items-center gap-1 rounded-full border border-emerald-300/30 bg-emerald-400/10 px-2.5 py-0.5 text-[11px] tabular-nums text-emerald-200"
+                      >
+                        <AudioLines className="h-3 w-3" />
+                        <span>{audioQuality.label}</span>
+                        {audioQuality.parameterText ? (
+                          <span className="text-emerald-100/85">{audioQuality.parameterText}</span>
+                        ) : null}
+                      </span>
+                    ) : null}
+                    {infoChips.map((chip, index) => (
+                      <span
+                        key={`${chip}-${index}`}
                         className="rounded-full border border-white/15 bg-white/8 px-2.5 py-0.5 text-[11px] tabular-nums text-white/55"
                       >
                         {chip}
@@ -540,7 +641,7 @@ export function NowPlayingSheet({
             className="absolute inset-0 z-40 flex justify-end"
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
-            transition={{ duration: 0.2, ease: "easeOut" }}
+            transition={{ duration: 0.16, ease: "easeOut" }}
           >
             <button
               type="button"
@@ -551,7 +652,7 @@ export function NowPlayingSheet({
             <motion.aside
               initial={{ x: "100%" }}
               animate={{ x: 0 }}
-              transition={{ duration: 0.28, ease: [0.22, 1, 0.36, 1] }}
+              transition={{ type: "spring", stiffness: 260, damping: 20 }}
               className="flex h-full w-full max-w-[22.5rem] flex-col border-l border-white/20 bg-black/45 p-4 pt-16 backdrop-blur-2xl sm:max-w-[25rem]"
             >
               <div className="mb-4 flex items-center justify-between text-white">

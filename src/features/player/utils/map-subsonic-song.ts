@@ -35,6 +35,8 @@ export function mapSongToTrackInfo(song: SubsonicSong, client: SubsonicClient): 
     trackGainDb: parseGain(song.replayGainTrackGain),
     albumGainDb: parseGain(song.replayGainAlbumGain),
     bitRate: song.bitRate,
+    bitDepth: song.bitDepth,
+    sampleRate: song.sampleRate ?? song.samplingRate,
     suffix: song.suffix,
   };
 }

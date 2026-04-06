@@ -424,7 +424,7 @@ export function PlayerBar({
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            transition={{ duration: 0.18 }}
+            transition={{ duration: 0.16, ease: "easeOut" }}
             className="absolute inset-0 bottom-0 z-30"
             onClick={() => setQueueOpen(false)}
           >
@@ -432,7 +432,7 @@ export function PlayerBar({
               initial={{ y: 20, opacity: 0 }}
               animate={{ y: 0, opacity: 1 }}
               exit={{ y: 20, opacity: 0 }}
-              transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
+              transition={{ type: "spring", stiffness: 260, damping: 20 }}
               onClick={(e) => e.stopPropagation()}
               className="absolute bottom-[88px] right-3 z-30 flex max-h-[min(420px,60vh)] w-[340px] flex-col overflow-hidden rounded-xl border border-slate-200/80 bg-white/95 shadow-[0_-8px_32px_rgba(0,0,0,0.12)] backdrop-blur-xl dark:border-slate-700/70 dark:bg-slate-900/95 dark:shadow-[0_-8px_32px_rgba(0,0,0,0.4)] sm:right-4 sm:w-[380px]"
             >
@@ -532,7 +532,7 @@ export function PlayerBar({
             onClick={onOpenNowPlaying ?? onToggleNowPlaying}
             disabled={!currentTrack}
             className={cn(
-              "flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden rounded-lg border border-slate-200/80 bg-slate-100 transition-colors hover:border-[var(--accent-border)] dark:border-slate-700/70 dark:bg-slate-900",
+              "flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden rounded-lg border border-slate-200/80 bg-slate-100 transition-[transform,border-color,background-color] duration-320 ease-in-out hover:scale-[1.02] hover:border-[var(--accent-border)] dark:border-slate-700/70 dark:bg-slate-900",
               !currentTrack && "cursor-not-allowed opacity-60 hover:border-slate-200/80 dark:hover:border-slate-700/70",
             )}
           >
@@ -582,7 +582,7 @@ export function PlayerBar({
               aria-label="shuffle"
               onClick={toggleShuffle}
               disabled={queue.length <= 1}
-              className={cn("hidden sm:inline-flex", shuffle && "bg-slate-200 dark:bg-slate-800")}
+              className={cn("hidden sm:inline-flex duration-[120ms] ease-out active:scale-[0.9]", shuffle && "bg-slate-200 dark:bg-slate-800")}
             >
               <Shuffle className="h-4 w-4" />
             </Button>
@@ -592,6 +592,7 @@ export function PlayerBar({
               aria-label="previous"
               onClick={handlePlayPrevious}
               disabled={queue.length === 0}
+              className="duration-[120ms] ease-out active:scale-[0.9]"
             >
               <SkipBack className="h-4 w-4" />
             </Button>
@@ -602,7 +603,7 @@ export function PlayerBar({
                 void handleTogglePlay();
               }}
               disabled={!effectiveStreamUrl}
-              className="h-11 w-11 rounded-full"
+              className="h-11 w-11 rounded-full duration-[120ms] ease-out active:scale-[0.88] active:brightness-90"
             >
               {isPlaying ? <Pause className="h-4.5 w-4.5" /> : <Play className="h-4.5 w-4.5" />}
             </Button>
@@ -612,6 +613,7 @@ export function PlayerBar({
               aria-label="next"
               onClick={handlePlayNext}
               disabled={queue.length === 0}
+              className="duration-[120ms] ease-out active:scale-[0.9]"
             >
               <SkipForward className="h-4 w-4" />
             </Button>
@@ -620,7 +622,7 @@ export function PlayerBar({
               variant="ghost"
               aria-label="repeat"
               onClick={handleRepeatToggle}
-              className={cn("hidden sm:inline-flex", repeatMode !== "off" && "bg-slate-200 dark:bg-slate-800")}
+              className={cn("hidden sm:inline-flex duration-[120ms] ease-out active:scale-[0.9]", repeatMode !== "off" && "bg-slate-200 dark:bg-slate-800")}
             >
               {repeatMode === "one" ? <Repeat1 className="h-4 w-4" /> : <Repeat2 className="h-4 w-4" />}
             </Button>
@@ -634,6 +636,7 @@ export function PlayerBar({
             <button
               type="button"
               aria-label="seek-progress"
+              data-press-animation="off"
               disabled={!effectiveStreamUrl}
               onClick={handleProgressBarSeek}
               onMouseMove={handleProgressHover}

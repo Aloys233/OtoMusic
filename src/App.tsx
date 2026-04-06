@@ -1,5 +1,7 @@
 import { useQueryClient } from "@tanstack/react-query";
+import { motion, useReducedMotion } from "framer-motion";
 import {
+  AudioLines,
   ArrowLeft,
   CalendarDays,
   Clock3,
@@ -35,6 +37,7 @@ import { usePlaylists } from "@/features/library/hooks/use-playlists";
 import { useArtistInfo } from "@/features/library/hooks/use-artist-info";
 import { AlbumGridItem } from "@/features/library/components/AlbumGridItem";
 import { SongListItem } from "@/features/library/components/SongListItem";
+import { resolveAudioQuality } from "@/features/player/utils/audio-quality";
 import { mapSongToTrackInfo } from "@/features/player/utils/map-subsonic-song";
 import { useDominantColor } from "@/hooks/use-dominant-color";
 import { useMediaSession } from "@/hooks/use-media-session";
@@ -1757,6 +1760,31 @@ export default function App() {
       : viewDescriptionMap[activeNavSection];
   const canGoBack = navHistory.index > 0;
   const canGoForward = navHistory.index < navHistory.stack.length - 1;
+  const prefersReducedMotion = useReducedMotion();
+  const pageTransitionKey = useMemo(() => {
+    if (activeNavSection === "album-detail") {
+      return `album-detail:${selectedAlbumId ?? "none"}`;
+    }
+
+    if (activeNavSection === "playlist-detail") {
+      return `playlist-detail:${selectedPlaylistId ?? "none"}`;
+    }
+
+    if (activeNavSection === "artist-detail") {
+      return `artist-detail:${normalizedSelectedArtistName || "none"}`;
+    }
+
+    if (activeNavSection === "search") {
+      return "search";
+    }
+
+    return activeNavSection;
+  }, [
+    activeNavSection,
+    normalizedSelectedArtistName,
+    selectedAlbumId,
+    selectedPlaylistId,
+  ]);
 
   const handleNavigateSection = (section: LibraryNavSection) => {
     if (section !== "search" && searchKeyword.trim()) {
@@ -2026,7 +2054,19 @@ export default function App() {
           />
 
           <main ref={mainRef} className="relative h-full min-h-0 flex-1 overflow-y-auto p-6 sm:p-8 scrollbar-thin">
-            <div className="flex flex-col gap-8 pb-12">
+            <div className="pb-12">
+              <motion.div
+                key={pageTransitionKey}
+                className="flex flex-col gap-8"
+                initial={prefersReducedMotion ? { opacity: 1, scale: 1 } : { opacity: 0.82, scale: 0.985 }}
+                animate={{ opacity: 1, scale: 1 }}
+                style={{ willChange: "opacity, transform" }}
+                transition={
+                  prefersReducedMotion
+                    ? { duration: 0 }
+                    : { duration: 0.14, ease: [0.16, 1, 0.3, 1] }
+                }
+              >
         <section className="flex items-center justify-between">
           <div>
             <div className="mb-2 flex items-center gap-2 text-slate-500 dark:text-slate-300">
@@ -3678,8 +3718,8 @@ export default function App() {
                   ) : filteredSongs.length > 0 ? (
                     <div className="overflow-hidden rounded-xl border border-slate-200/90 dark:border-slate-800/90">
                       <div className="overflow-x-auto scrollbar-thin">
-                        <div className="min-w-[860px]">
-                          <div className="grid grid-cols-[44px_minmax(200px,2.3fr)_minmax(140px,1.2fr)_minmax(140px,1.2fr)_80px_62px] items-center bg-slate-100/80 px-4 py-2 text-[0.68rem] font-semibold uppercase tracking-[0.12em] text-slate-500 dark:bg-slate-900/80 dark:text-slate-400">
+                        <div className="min-w-[980px]">
+                          <div className="grid grid-cols-[44px_minmax(200px,2.2fr)_minmax(140px,1.1fr)_minmax(140px,1.1fr)_minmax(170px,1.25fr)_62px] items-center bg-slate-100/80 px-4 py-2 text-[0.68rem] font-semibold uppercase tracking-[0.12em] text-slate-500 dark:bg-slate-900/80 dark:text-slate-400">
                             <span>#</span>
                             <span>标题</span>
                             <span>艺人</span>
@@ -3688,58 +3728,85 @@ export default function App() {
                             <span className="justify-self-end">时长</span>
                           </div>
                           <div className="divide-y divide-slate-200/70 dark:divide-slate-800/90">
-                            {displayedSongs.map((song, index) => (
-                              <button
-                                key={song.id}
-                                type="button"
-                                onClick={() => handlePlaySong(song.id)}
-                                className={cn(
-                                  "group grid w-full grid-cols-[44px_minmax(200px,2.3fr)_minmax(140px,1.2fr)_minmax(140px,1.2fr)_80px_62px] items-center px-4 py-2 text-left outline-none transition-colors duration-150",
-                                  "hover:bg-slate-100/90 dark:hover:bg-slate-800/60",
-                                  currentTrackId === song.id
-                                    ? "bg-[var(--accent-soft)] text-[var(--accent-text)]"
-                                    : "text-slate-700 dark:text-slate-200",
-                                )}
-                              >
-                                <span className={cn(
-                                  "text-sm font-semibold tabular-nums text-slate-500 transition-colors group-hover:text-slate-700 dark:text-slate-400 dark:group-hover:text-slate-200",
-                                  currentTrackId === song.id && "text-[var(--accent-solid)]",
-                                )}>
-                                  {songPageStart + index + 1}
-                                </span>
-                                <span className="truncate text-sm font-medium">{song.title}</span>
-                                <span
-                                  role="button"
-                                  tabIndex={0}
-                                  onClick={(e) => { e.stopPropagation(); if (song.artist) handleOpenArtistDetail(song.artist); }}
-                                  onKeyDown={(e) => { if (e.key === "Enter") { e.stopPropagation(); if (song.artist) handleOpenArtistDetail(song.artist); } }}
-                                  className="truncate text-xs text-slate-500 dark:text-slate-400 transition-colors hover:text-[var(--accent-text)] hover:underline cursor-pointer"
+                            {displayedSongs.map((song, index) => {
+                              const audioQuality = resolveAudioQuality({
+                                suffix: song.suffix,
+                                bitDepth: song.bitDepth,
+                                sampleRate: song.sampleRate ?? song.samplingRate,
+                              });
+
+                              return (
+                                <button
+                                  key={song.id}
+                                  type="button"
+                                  onClick={() => handlePlaySong(song.id)}
+                                  className={cn(
+                                    "group grid w-full grid-cols-[44px_minmax(200px,2.2fr)_minmax(140px,1.1fr)_minmax(140px,1.1fr)_minmax(170px,1.25fr)_62px] items-center px-4 py-2 text-left outline-none transition-colors duration-150",
+                                    "hover:bg-slate-100/90 dark:hover:bg-slate-800/60",
+                                    currentTrackId === song.id
+                                      ? "bg-[var(--accent-soft)] text-[var(--accent-text)]"
+                                      : "text-slate-700 dark:text-slate-200",
+                                  )}
                                 >
-                                  {song.artist ?? "Unknown Artist"}
-                                </span>
-                                {song.albumId ? (
+                                  <span
+                                    className={cn(
+                                      "text-sm font-semibold tabular-nums text-slate-500 transition-colors group-hover:text-slate-700 dark:text-slate-400 dark:group-hover:text-slate-200",
+                                      currentTrackId === song.id && "text-[var(--accent-solid)]",
+                                    )}
+                                  >
+                                    {songPageStart + index + 1}
+                                  </span>
+                                  <span className="truncate text-sm font-medium">{song.title}</span>
                                   <span
                                     role="button"
                                     tabIndex={0}
-                                    onClick={(e) => { e.stopPropagation(); handleOpenAlbumDetail(song.albumId!); }}
-                                    onKeyDown={(e) => { if (e.key === "Enter") { e.stopPropagation(); handleOpenAlbumDetail(song.albumId!); } }}
+                                    onClick={(e) => { e.stopPropagation(); if (song.artist) handleOpenArtistDetail(song.artist); }}
+                                    onKeyDown={(e) => { if (e.key === "Enter") { e.stopPropagation(); if (song.artist) handleOpenArtistDetail(song.artist); } }}
                                     className="truncate text-xs text-slate-500 dark:text-slate-400 transition-colors hover:text-[var(--accent-text)] hover:underline cursor-pointer"
                                   >
-                                    {song.album ?? "Unknown Album"}
+                                    {song.artist ?? "Unknown Artist"}
                                   </span>
-                                ) : (
-                                  <span className="truncate text-xs text-slate-500 dark:text-slate-400">
-                                    {song.album ?? "Unknown Album"}
+                                  {song.albumId ? (
+                                    <span
+                                      role="button"
+                                      tabIndex={0}
+                                      onClick={(e) => { e.stopPropagation(); handleOpenAlbumDetail(song.albumId!); }}
+                                      onKeyDown={(e) => { if (e.key === "Enter") { e.stopPropagation(); handleOpenAlbumDetail(song.albumId!); } }}
+                                      className="truncate text-xs text-slate-500 dark:text-slate-400 transition-colors hover:text-[var(--accent-text)] hover:underline cursor-pointer"
+                                    >
+                                      {song.album ?? "Unknown Album"}
+                                    </span>
+                                  ) : (
+                                    <span className="truncate text-xs text-slate-500 dark:text-slate-400">
+                                      {song.album ?? "Unknown Album"}
+                                    </span>
+                                  )}
+                                  <span className="truncate text-[0.68rem] tabular-nums text-slate-400 dark:text-slate-500">
+                                    <span className="inline-flex items-center gap-1.5">
+                                      {audioQuality ? (
+                                        <span className="inline-flex items-center gap-1 rounded-full border border-slate-200/80 bg-slate-100/80 px-2 py-0.5 text-[0.64rem] font-medium tracking-normal text-slate-600 dark:border-slate-700/80 dark:bg-slate-800/70 dark:text-slate-200">
+                                          <AudioLines className="h-3 w-3 shrink-0 text-emerald-500 dark:text-emerald-400" />
+                                          <span>{audioQuality.label}</span>
+                                          {audioQuality.parameterText ? (
+                                            <span className="text-slate-500 dark:text-slate-300">
+                                              {audioQuality.parameterText}
+                                            </span>
+                                          ) : null}
+                                        </span>
+                                      ) : null}
+                                      {song.bitRate ? (
+                                        <span className="text-[0.64rem] text-slate-500 dark:text-slate-400">
+                                          {song.bitRate}k
+                                        </span>
+                                      ) : null}
+                                    </span>
                                   </span>
-                                )}
-                                <span className="truncate text-[0.68rem] tabular-nums text-slate-400 dark:text-slate-500">
-                                  {[song.suffix?.toUpperCase(), song.bitRate ? `${song.bitRate}k` : null].filter(Boolean).join(" ")}
-                                </span>
-                                <span className="justify-self-end text-[0.7rem] tabular-nums text-slate-500 dark:text-slate-400">
-                                  {formatTime(song.duration ?? 0)}
-                                </span>
-                              </button>
-                            ))}
+                                  <span className="justify-self-end text-[0.7rem] tabular-nums text-slate-500 dark:text-slate-400">
+                                    {formatTime(song.duration ?? 0)}
+                                  </span>
+                                </button>
+                              );
+                            })}
                           </div>
                         </div>
                       </div>
@@ -3790,7 +3857,8 @@ export default function App() {
               正在同步 Navidrome 数据...
             </div>
           )}
-          </div>
+              </motion.div>
+            </div>
           </main>
         </div>
 

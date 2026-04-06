@@ -15,22 +15,21 @@ export const AlbumGridItem = React.memo(({ id, title, artist, coverUrl, onClick,
       <button
         type="button"
         onClick={() => onClick(id)}
-        className="w-full text-left outline-none group flex flex-col gap-2"
+        className="group flex w-full flex-col gap-2 text-left outline-none"
       >
-        <div className="aspect-square w-full overflow-hidden rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-100 dark:bg-slate-900/40 relative">
+        <div className="relative aspect-square w-full overflow-hidden rounded-xl border border-slate-200 bg-slate-100 transition-[transform,border-color,box-shadow] duration-320 ease-in-out group-hover:scale-[1.015] group-hover:border-[var(--accent-border)] group-hover:shadow-[0_10px_28px_rgba(15,23,42,0.18)] dark:border-slate-800 dark:bg-slate-900/40 dark:group-hover:shadow-[0_10px_30px_rgba(2,6,23,0.45)]">
           {coverUrl ? (
             <img
               src={coverUrl}
               alt={`${title} cover`}
-              className="h-full w-full object-cover"
+              className="h-full w-full object-cover transition-transform duration-360 ease-in-out group-hover:scale-[1.035]"
               loading="lazy"
               decoding="async"
             />
           ) : (
             <div className="h-full w-full bg-slate-200 dark:bg-slate-800" />
           )}
-          {/* 移除复杂的 Hover 动画效果，保留最基础的点击态 */}
-          <div className="absolute inset-0 bg-black/0 group-active:bg-black/5 dark:group-active:bg-white/5 transition-colors" />
+          <div className="absolute inset-0 bg-black/0 transition-colors duration-320 ease-in-out group-hover:bg-black/[0.03] group-active:bg-black/5 dark:group-hover:bg-white/[0.04] dark:group-active:bg-white/5" />
         </div>
 
         <div className="px-1 min-w-0">

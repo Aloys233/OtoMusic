@@ -15,6 +15,8 @@ export type TrackInfo = {
   trackGainDb?: number;
   albumGainDb?: number;
   bitRate?: number;
+  bitDepth?: number;
+  sampleRate?: number;
   suffix?: string;
 };
 
