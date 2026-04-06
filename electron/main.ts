@@ -26,7 +26,22 @@ const devServerUrl = process.env.VITE_DEV_SERVER_URL;
 const rendererHtmlPath = path.resolve(__dirname, "../dist/index.html");
 const preloadPath = path.resolve(__dirname, "./preload.mjs");
 
-function resolveTrayIconPath() {
+function applyV8MemoryLimit() {
+  const maxOldSpaceMbRaw = process.env.OTOMUSIC_MAX_OLD_SPACE_MB;
+  if (!maxOldSpaceMbRaw) {
+    return;
+  }
+
+  const maxOldSpaceMb = Number.parseInt(maxOldSpaceMbRaw, 10);
+  if (!Number.isFinite(maxOldSpaceMb) || maxOldSpaceMb < 256) {
+    console.warn("[OtoMusic] invalid OTOMUSIC_MAX_OLD_SPACE_MB, expected integer >= 256");
+    return;
+  }
+
+  app.commandLine.appendSwitch("js-flags", `--max-old-space-size=${Math.floor(maxOldSpaceMb)}`);
+}
+
+function resolveAppIconPath() {
   const candidates = [
     path.join(process.resourcesPath, "tray", "icon.png"),
     path.join(process.resourcesPath, "electron", "assets", "icon.png"),
@@ -229,7 +244,7 @@ function registerGlobalShortcuts() {
 
 function createTray() {
   try {
-    const trayIconPath = resolveTrayIconPath();
+    const trayIconPath = resolveAppIconPath();
     if (!trayIconPath) {
       console.warn("[OtoMusic] tray icon not found, tray disabled");
       return;
@@ -287,6 +302,7 @@ function createTray() {
 }
 
 function createMainWindow() {
+  const appIconPath = resolveAppIconPath();
   mainWindow = new BrowserWindow({
     title: "OtoMusic",
     width: 1440,
@@ -295,6 +311,7 @@ function createMainWindow() {
     minHeight: 700,
     frame: false,
     show: false,
+    icon: appIconPath ?? undefined,
     webPreferences: {
       preload: preloadPath,
       contextIsolation: true,
@@ -329,6 +346,7 @@ function createMainWindow() {
 }
 
 // Single instance lock — re-launching the app shows the existing window
+applyV8MemoryLimit();
 const gotLock = app.requestSingleInstanceLock();
 
 if (!gotLock) {

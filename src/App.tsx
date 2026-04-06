@@ -14,11 +14,10 @@ import {
   Shuffle,
   Tags,
 } from "lucide-react";
-import { useEffect, useMemo, useState, useCallback, useRef } from "react";
+import { Suspense, lazy, useEffect, useMemo, useState, useCallback, useRef } from "react";
 
 import { LoginPanel } from "@/features/auth/components/LoginPanel";
 import { PlayerBar } from "@/components/layout/PlayerBar";
-import { SettingsPanel } from "@/components/layout/SettingsPanel";
 import { Sidebar } from "@/components/layout/Sidebar";
 import { WindowTitlebar } from "@/components/layout/WindowTitlebar";
 import { Button } from "@/components/ui/button";
@@ -36,7 +35,6 @@ import { usePlaylists } from "@/features/library/hooks/use-playlists";
 import { useArtistInfo } from "@/features/library/hooks/use-artist-info";
 import { AlbumGridItem } from "@/features/library/components/AlbumGridItem";
 import { SongListItem } from "@/features/library/components/SongListItem";
-import { NowPlayingSheet } from "@/features/player/components/NowPlayingSheet";
 import { mapSongToTrackInfo } from "@/features/player/utils/map-subsonic-song";
 import { useDominantColor } from "@/hooks/use-dominant-color";
 import { useMediaSession } from "@/hooks/use-media-session";
@@ -198,6 +196,14 @@ function getAlbumColumns(viewportWidth: number) {
 
 const ALBUM_ROWS_PER_PAGE = 4;
 const SONGS_PER_PAGE = 60;
+const LazyNowPlayingSheet = lazy(async () => {
+  const module = await import("@/features/player/components/NowPlayingSheet");
+  return { default: module.NowPlayingSheet };
+});
+const LazySettingsPanel = lazy(async () => {
+  const module = await import("@/components/layout/SettingsPanel");
+  return { default: module.SettingsPanel };
+});
 
 function parseColorToRgb(color: string) {
   const hex = color.trim().toLowerCase();
@@ -285,6 +291,8 @@ export default function App() {
   );
   const [isNowPlayingSheetOpen, setNowPlayingSheetOpen] = useState(false);
   const [isSettingsPanelOpen, setSettingsPanelOpen] = useState(false);
+  const [hasLoadedNowPlayingSheet, setHasLoadedNowPlayingSheet] = useState(false);
+  const [hasLoadedSettingsPanel, setHasLoadedSettingsPanel] = useState(false);
   const [isRefreshingLibrary, setRefreshingLibrary] = useState(false);
   const [isBioExpanded, setBioExpanded] = useState(false);
   const [artistImageLoadFailed, setArtistImageLoadFailed] = useState(false);
@@ -325,6 +333,18 @@ export default function App() {
     hasAutoCheckedUpdateRef.current = true;
     void updateChecker.checkForUpdate();
   }, [updateChecker.checkForUpdate]);
+
+  useEffect(() => {
+    if (isNowPlayingSheetOpen) {
+      setHasLoadedNowPlayingSheet(true);
+    }
+  }, [isNowPlayingSheetOpen]);
+
+  useEffect(() => {
+    if (isSettingsPanelOpen) {
+      setHasLoadedSettingsPanel(true);
+    }
+  }, [isSettingsPanelOpen]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -3774,30 +3794,35 @@ export default function App() {
           </main>
         </div>
 
-        <NowPlayingSheet
-          open={isNowPlayingSheetOpen}
-          currentTrack={currentTrack}
-          queue={queue}
-          isPlaying={isPlaying}
-          lyrics={lyricsData}
-          lyricsLoading={lyricsLoading}
-          lyricsFontScale={lyricsFontScale}
-          lyricsAlign={lyricsAlign}
-          showTranslatedLyrics={showTranslatedLyrics}
-          showRomanizedLyrics={showRomanizedLyrics}
-          backgroundBlurEnabled={nowPlayingBackgroundBlurEnabled}
-          highResCoverUrl={nowPlayingHighResCoverUrl}
-          onClose={handleCloseNowPlayingSheet}
-          onSelectTrack={handleSelectQueueTrack}
-          onArtistClick={handleOpenArtistDetail}
-          onAlbumClick={handleOpenAlbumDetail}
-        />
-
-        <SettingsPanel
-          open={isSettingsPanelOpen}
-          onClose={handleCloseSettingsPanel}
-          updateChecker={updateChecker}
-        />
+        <Suspense fallback={null}>
+          {hasLoadedNowPlayingSheet && (
+            <LazyNowPlayingSheet
+              open={isNowPlayingSheetOpen}
+              currentTrack={currentTrack}
+              queue={queue}
+              isPlaying={isPlaying}
+              lyrics={lyricsData}
+              lyricsLoading={lyricsLoading}
+              lyricsFontScale={lyricsFontScale}
+              lyricsAlign={lyricsAlign}
+              showTranslatedLyrics={showTranslatedLyrics}
+              showRomanizedLyrics={showRomanizedLyrics}
+              backgroundBlurEnabled={nowPlayingBackgroundBlurEnabled}
+              highResCoverUrl={nowPlayingHighResCoverUrl}
+              onClose={handleCloseNowPlayingSheet}
+              onSelectTrack={handleSelectQueueTrack}
+              onArtistClick={handleOpenArtistDetail}
+              onAlbumClick={handleOpenAlbumDetail}
+            />
+          )}
+          {hasLoadedSettingsPanel && (
+            <LazySettingsPanel
+              open={isSettingsPanelOpen}
+              onClose={handleCloseSettingsPanel}
+              updateChecker={updateChecker}
+            />
+          )}
+        </Suspense>
 
         <PlayerBar
           nowPlayingOpen={isNowPlayingSheetOpen}

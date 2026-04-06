@@ -481,6 +481,44 @@ export class AudioEngine {
     };
   }
 
+  dispose() {
+    this.mpvPropertyUnsubscribe?.();
+    this.mpvPropertyUnsubscribe = null;
+    this.mpvEndedUnsubscribe?.();
+    this.mpvEndedUnsubscribe = null;
+
+    if (this.mediaElement) {
+      this.endedListeners.forEach((listener) => {
+        this.mediaElement?.removeEventListener("ended", listener);
+      });
+
+      try {
+        this.mediaElement.pause();
+      } catch {
+        // Ignore pause failures during teardown.
+      }
+
+      try {
+        this.mediaElement.src = "";
+        this.mediaElement.load();
+      } catch {
+        // Ignore source reset failures during teardown.
+      }
+    }
+
+    this.endedListeners.clear();
+    this.disposeProcessingPipeline();
+
+    this.mediaElement = null;
+    this.ensurePromise = null;
+    this.currentStreamUrl = "";
+    this.pendingStartSeconds = null;
+    this.mpvAvailable = null;
+    this.mpvTimePos = 0;
+    this.mpvDuration = 0;
+    this.mpvPaused = true;
+  }
+
   private applyReplayGain(options: ReplayGainOptions) {
     const db = options.preferAlbumGain
       ? (options.albumGainDb ?? options.trackGainDb)
