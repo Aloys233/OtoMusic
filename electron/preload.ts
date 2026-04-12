@@ -16,6 +16,11 @@ type MpvPlayPayload = {
   speed?: number;
 };
 type MpvPropertyName = "time-pos" | "duration" | "pause";
+type SecureAuthSession = {
+  baseUrl: string;
+  username: string;
+  password: string;
+};
 
 const electronBridge = {
   sendWindowControl(channel: WindowControlChannel) {
@@ -67,6 +72,15 @@ const electronBridge = {
   },
   async mpvGetDuration() {
     return await ipcRenderer.invoke("mpv:get-duration");
+  },
+  async loadSecureSession() {
+    return await ipcRenderer.invoke("auth:load-secure-session") as SecureAuthSession | null;
+  },
+  async saveSecureSession(session: SecureAuthSession) {
+    await ipcRenderer.invoke("auth:save-secure-session", session);
+  },
+  async clearSecureSession() {
+    await ipcRenderer.invoke("auth:clear-secure-session");
   },
   onMpvEnded(handler: () => void) {
     const listener = () => {

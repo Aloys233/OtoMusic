@@ -40,6 +40,7 @@
     "dev:web": "vite --host --port 1420 --mode web --config vite.config.ts",
     "build": "tsc -b && vite build --config vite.config.ts",
     "build:desktop": "pnpm build && electron-builder",
+    "check": "pnpm typecheck && pnpm build",
     "preview": "vite preview --host --port 1420 --config vite.config.ts",
     "start": "electron .",
     "typecheck": "tsc --noEmit"

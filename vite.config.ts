@@ -27,4 +27,16 @@ export default defineConfig({
       "@": path.resolve(__dirname, "./src"),
     },
   },
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          query: ["@tanstack/react-query"],
+          motion: ["framer-motion"],
+          icons: ["lucide-react"],
+          radix: ["@radix-ui/react-separator", "@radix-ui/react-slider", "@radix-ui/react-slot"],
+        },
+      },
+    },
+  },
 });

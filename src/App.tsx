@@ -259,8 +259,10 @@ export default function App() {
   const session = useAuthStore((state) => state.session);
   const isAuthenticated = useAuthStore((state) => state.isAuthenticated);
   const isLoggingIn = useAuthStore((state) => state.isLoggingIn);
+  const isRestoringSession = useAuthStore((state) => state.isRestoringSession);
   const loginError = useAuthStore((state) => state.loginError);
   const login = useAuthStore((state) => state.login);
+  const restoreSecureSession = useAuthStore((state) => state.restoreSecureSession);
   const clearLoginError = useAuthStore((state) => state.clearLoginError);
 
   const selectedAlbumId = useLibraryStore((state) => state.selectedAlbumId);
@@ -314,6 +316,10 @@ export default function App() {
   const updateChecker = useUpdateChecker();
 
   useEffect(() => {
+    void restoreSecureSession();
+  }, [restoreSecureSession]);
+
+  useEffect(() => {
     if (typeof window === "undefined") {
       return;
     }
@@ -360,14 +366,14 @@ export default function App() {
   }, [searchInput]);
 
   const client = useMemo(() => {
-    if (!isAuthenticated || !session) {
+    if (!isAuthenticated || !session?.password) {
       return null;
     }
 
     return createSubsonicClient(session);
   }, [isAuthenticated, session]);
 
-  const sessionKey = isAuthenticated && session
+  const sessionKey = isAuthenticated && session?.password
     ? `${session.baseUrl}|${session.username}`
     : null;
 
@@ -1994,6 +2000,20 @@ export default function App() {
       window.removeEventListener("mouseup", onMouseUp);
     };
   }, []);
+
+  if (isRestoringSession) {
+    return (
+      <div className="relative h-screen w-full overflow-hidden bg-slate-100 text-slate-900 dark:bg-slate-950 dark:text-slate-100">
+        <div className="relative flex h-full w-full items-center justify-center overflow-hidden px-6">
+          <WindowTitlebar />
+          <div className="relative z-10 flex items-center gap-3 rounded-lg border border-slate-200 bg-white/80 px-4 py-3 text-sm text-slate-700 shadow-sm dark:border-slate-800 dark:bg-slate-900/80 dark:text-slate-200">
+            <Loader2 className="h-4 w-4 animate-spin" />
+            正在恢复登录状态...
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   if (!isAuthenticated) {
     return (

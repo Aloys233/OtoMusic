@@ -238,7 +238,7 @@ export function SettingsPanel({ open, onClose, updateChecker }: SettingsPanelPro
     : undefined;
 
   const scanClient = useMemo(() => {
-    if (!session) {
+    if (!session?.password) {
       return null;
     }
     return createSubsonicClient(session);
@@ -423,7 +423,7 @@ export function SettingsPanel({ open, onClose, updateChecker }: SettingsPanelPro
         primaryUrl: session.baseUrl,
         fallbackUrls: [],
         username: session.username,
-        password: session.password,
+        password: "",
       });
     }
   }, [open, session, serverConfig, saveServerConfig]);
@@ -779,7 +779,7 @@ export function SettingsPanel({ open, onClose, updateChecker }: SettingsPanelPro
 
                     {audioPassthroughEnabled ? (
                       <p className="rounded-xl border border-sky-200/80 bg-sky-50 px-3 py-2 text-xs text-sky-700 dark:border-sky-900/60 dark:bg-sky-950/35 dark:text-sky-200">
-                        当前处于直通模式：下方 DSP 相关参数会被绕过。
+                        当前处于直通模式：需要系统 PATH 中可用的 mpv；下方 DSP 相关参数会被绕过。
                       </p>
                     ) : null}
 

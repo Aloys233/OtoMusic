@@ -37,6 +37,8 @@ Thumbs.db
 
 # TypeScript
 *.tsbuildinfo
+*.config.js
+*.config.d.ts
 
 # Temporary
 /home/luodh/.gemini/tmp/

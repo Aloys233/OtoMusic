@@ -14,6 +14,11 @@ export type MpvPlayPayload = {
   speed?: number;
 };
 export type MpvPropertyName = "time-pos" | "duration" | "pause";
+export type SecureAuthSession = {
+  baseUrl: string;
+  username: string;
+  password: string;
+};
 
 export function isElectronRuntime() {
   if (typeof window === "undefined") {
@@ -146,4 +151,28 @@ export function listenMpvProperty(handler: (name: MpvPropertyName, value: unknow
   }
 
   return window.electron.onMpvProperty(handler);
+}
+
+export async function loadSecureSession() {
+  if (!isElectronRuntime() || !window.electron) {
+    return null;
+  }
+
+  return await window.electron.loadSecureSession();
+}
+
+export async function saveSecureSession(session: SecureAuthSession) {
+  if (!isElectronRuntime() || !window.electron) {
+    return;
+  }
+
+  await window.electron.saveSecureSession(session);
+}
+
+export async function clearSecureSession() {
+  if (!isElectronRuntime() || !window.electron) {
+    return;
+  }
+
+  await window.electron.clearSecureSession();
 }

@@ -48,17 +48,15 @@ async function fetchWithTimeout(url: string, timeoutMs: number): Promise<Respons
 }
 
 async function fetchLatestRelease(): Promise<ReleaseInfo> {
-  // Try direct GitHub API first
   try {
     const response = await fetchWithTimeout(GITHUB_API_URL, 8000);
     if (response.ok) {
       return await response.json();
     }
   } catch {
-    // Direct access failed, try proxies
+    // Direct access failed, try mirrors below.
   }
 
-  // Try proxy mirrors in order
   for (const proxy of PROXY_MIRRORS) {
     try {
       const response = await fetchWithTimeout(`${proxy}${GITHUB_API_URL}`, 8000);

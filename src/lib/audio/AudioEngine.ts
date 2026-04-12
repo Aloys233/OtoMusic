@@ -19,12 +19,37 @@ type ReplayGainOptions = {
   preferAlbumGain?: boolean;
 };
 
+export type AudioReactiveSnapshot = {
+  available: boolean;
+  energy: number;
+  bass: number;
+  mid: number;
+  treble: number;
+  pulse: number;
+};
+
 const EQ_BAND_FREQUENCIES = [31, 62, 125, 250, 500, 1000, 2000, 4000, 8000, 16000] as const;
+
+const EMPTY_AUDIO_REACTIVE_SNAPSHOT: AudioReactiveSnapshot = {
+  available: false,
+  energy: 0,
+  bass: 0,
+  mid: 0,
+  treble: 0,
+  pulse: 0,
+};
 
 type SinkAwareAudioElement = HTMLAudioElement & {
   setSinkId?: (sinkId: string) => Promise<void>;
   sinkId?: string;
 };
+
+function clamp01(value: number) {
+  if (!Number.isFinite(value)) {
+    return 0;
+  }
+  return Math.max(0, Math.min(1, value));
+}
 
 function tryDisconnect(node: AudioNode | null | undefined) {
   if (!node) {
@@ -54,6 +79,16 @@ export class AudioEngine {
   private equalizerNodes: BiquadFilterNode[] = [];
 
   private masterGainNode: GainNode | null = null;
+
+  private analyserNode: AnalyserNode | null = null;
+
+  private analyserFrequencyData: Uint8Array<ArrayBuffer> | null = null;
+
+  private analyserWaveformData: Uint8Array<ArrayBuffer> | null = null;
+
+  private reactivePulse = 0;
+
+  private reactivePrevEnergy = 0;
 
   private ensurePromise: Promise<void> | null = null;
 
@@ -469,6 +504,64 @@ export class AudioEngine {
     return Number.isFinite(duration) ? (duration as number) : 0;
   }
 
+  getAudioReactiveSnapshot(): AudioReactiveSnapshot {
+    if (
+      this.isUsingMpvBackend() ||
+      !this.context ||
+      !this.analyserNode ||
+      !this.analyserFrequencyData ||
+      !this.analyserWaveformData
+    ) {
+      this.reactivePulse = 0;
+      this.reactivePrevEnergy = 0;
+      return EMPTY_AUDIO_REACTIVE_SNAPSHOT;
+    }
+
+    if (!this.mediaElement || this.mediaElement.paused || this.mediaElement.ended) {
+      this.reactivePulse *= 0.9;
+      this.reactivePrevEnergy *= 0.92;
+      return {
+        ...EMPTY_AUDIO_REACTIVE_SNAPSHOT,
+        available: true,
+        pulse: this.reactivePulse,
+      };
+    }
+
+    const analyserNode = this.analyserNode;
+    const frequencyData = this.analyserFrequencyData;
+    const waveformData = this.analyserWaveformData;
+
+    analyserNode.getByteFrequencyData(frequencyData);
+    analyserNode.getByteTimeDomainData(waveformData);
+
+    const bass = this.averageBand(frequencyData, 24, 180, analyserNode, this.context.sampleRate) / 255;
+    const mid = this.averageBand(frequencyData, 180, 2200, analyserNode, this.context.sampleRate) / 255;
+    const treble = this.averageBand(frequencyData, 2200, 10000, analyserNode, this.context.sampleRate) / 255;
+
+    let rmsAccumulator = 0;
+    for (let index = 0; index < waveformData.length; index += 1) {
+      const normalized = ((waveformData[index] ?? 128) - 128) / 128;
+      rmsAccumulator += normalized * normalized;
+    }
+    const rms = Math.sqrt(rmsAccumulator / waveformData.length);
+
+    const spectralEnergy = bass * 0.52 + mid * 0.33 + treble * 0.15;
+    const rawEnergy = clamp01(spectralEnergy * 0.78 + rms * 1.45);
+    const smoothedEnergy = this.reactivePrevEnergy * 0.82 + rawEnergy * 0.18;
+    const attack = Math.max(0, rawEnergy - this.reactivePrevEnergy);
+    this.reactivePulse = clamp01(this.reactivePulse * 0.84 + attack * 2.5);
+    this.reactivePrevEnergy = smoothedEnergy;
+
+    return {
+      available: true,
+      energy: smoothedEnergy,
+      bass: clamp01(bass),
+      mid: clamp01(mid),
+      treble: clamp01(treble),
+      pulse: this.reactivePulse,
+    };
+  }
+
   async onEnded(listener: () => void) {
     await this.ensureInitialized();
     const mediaElement = this.getMediaElement();
@@ -569,7 +662,14 @@ export class AudioEngine {
   }
 
   private ensureProcessingPipeline() {
-    if (this.context && this.sourceNode && this.replayGainNode && this.preampGainNode && this.masterGainNode) {
+    if (
+      this.context &&
+      this.sourceNode &&
+      this.replayGainNode &&
+      this.preampGainNode &&
+      this.masterGainNode &&
+      this.analyserNode
+    ) {
       return;
     }
 
@@ -593,10 +693,15 @@ export class AudioEngine {
       return node;
     });
     const masterGainNode = context.createGain();
+    const analyserNode = context.createAnalyser();
 
     replayGainNode.gain.value = 1;
     preampGainNode.gain.value = Math.pow(10, this.preampGainDb / 20);
     masterGainNode.gain.value = this.targetVolume;
+    analyserNode.fftSize = 1024;
+    analyserNode.smoothingTimeConstant = 0.7;
+    analyserNode.minDecibels = -92;
+    analyserNode.maxDecibels = -10;
 
     sourceNode.connect(replayGainNode);
     replayGainNode.connect(preampGainNode);
@@ -609,7 +714,8 @@ export class AudioEngine {
     } else {
       preampGainNode.connect(masterGainNode);
     }
-    masterGainNode.connect(context.destination);
+    masterGainNode.connect(analyserNode);
+    analyserNode.connect(context.destination);
 
     this.context = context;
     this.sourceNode = sourceNode;
@@ -617,6 +723,11 @@ export class AudioEngine {
     this.preampGainNode = preampGainNode;
     this.equalizerNodes = equalizerNodes;
     this.masterGainNode = masterGainNode;
+    this.analyserNode = analyserNode;
+    this.analyserFrequencyData = new Uint8Array(analyserNode.frequencyBinCount);
+    this.analyserWaveformData = new Uint8Array(analyserNode.fftSize);
+    this.reactivePulse = 0;
+    this.reactivePrevEnergy = 0;
 
     this.syncEqualizerGain();
   }
@@ -715,6 +826,7 @@ export class AudioEngine {
       tryDisconnect(node);
     });
     tryDisconnect(this.masterGainNode);
+    tryDisconnect(this.analyserNode);
 
     if (this.context && this.context.state !== "closed") {
       void this.context.close().catch(() => {
@@ -728,6 +840,47 @@ export class AudioEngine {
     this.preampGainNode = null;
     this.equalizerNodes = [];
     this.masterGainNode = null;
+    this.analyserNode = null;
+    this.analyserFrequencyData = null;
+    this.analyserWaveformData = null;
+    this.reactivePulse = 0;
+    this.reactivePrevEnergy = 0;
+  }
+
+  private averageBand(
+    frequencyData: Uint8Array<ArrayBuffer>,
+    minHz: number,
+    maxHz: number,
+    analyserNode: AnalyserNode,
+    sampleRate: number,
+  ) {
+    const nyquist = sampleRate / 2;
+    if (nyquist <= 0 || frequencyData.length === 0) {
+      return 0;
+    }
+
+    const minIndex = Math.max(0, Math.floor((minHz / nyquist) * analyserNode.frequencyBinCount));
+    const maxIndex = Math.min(
+      analyserNode.frequencyBinCount - 1,
+      Math.ceil((maxHz / nyquist) * analyserNode.frequencyBinCount),
+    );
+
+    if (maxIndex < minIndex) {
+      return 0;
+    }
+
+    let total = 0;
+    let count = 0;
+    for (let index = minIndex; index <= maxIndex; index += 1) {
+      total += frequencyData[index] ?? 0;
+      count += 1;
+    }
+
+    if (count === 0) {
+      return 0;
+    }
+
+    return total / count;
   }
 
   private getMediaElement() {

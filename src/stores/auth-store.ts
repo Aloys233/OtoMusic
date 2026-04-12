@@ -2,6 +2,7 @@ import { create } from "zustand";
 import { persist } from "zustand/middleware";
 
 import { createSubsonicClient } from "@/lib/api/client";
+import { clearSecureSession, loadSecureSession, saveSecureSession } from "@/lib/desktop-api";
 import { normalizeServerBaseUrl } from "@/lib/server-url";
 
 export type AuthSession = {
@@ -23,9 +24,11 @@ type AuthState = {
   session: AuthSession | null;
   isAuthenticated: boolean;
   isLoggingIn: boolean;
+  isRestoringSession: boolean;
   loginError: string | null;
   serverConfig: ServerConfig | null;
   login: (session: AuthSession) => Promise<boolean>;
+  restoreSecureSession: () => Promise<void>;
   saveServerConfig: (config: ServerConfig) => void;
   clearServerConfig: () => void;
   addFallbackUrl: (url: string) => void;
@@ -40,6 +43,28 @@ function normalizeSession(session: AuthSession): AuthSession {
     baseUrl: normalizeServerBaseUrl(session.baseUrl),
     username: session.username.trim(),
     password: session.password,
+  };
+}
+
+function sanitizeSessionForPersist(session: AuthSession | null) {
+  if (!session) {
+    return null;
+  }
+
+  return {
+    ...session,
+    password: "",
+  };
+}
+
+function sanitizeServerConfigForPersist(config: ServerConfig | null) {
+  if (!config) {
+    return null;
+  }
+
+  return {
+    ...config,
+    password: "",
   };
 }
 
@@ -58,6 +83,7 @@ export const useAuthStore = create<AuthState>()(
       session: null,
       isAuthenticated: false,
       isLoggingIn: false,
+      isRestoringSession: false,
       loginError: null,
       serverConfig: null,
       login: async (session) => {
@@ -112,6 +138,15 @@ export const useAuthStore = create<AuthState>()(
             });
             await client.ping();
 
+            try {
+              await saveSecureSession({ ...normalized, baseUrl: url });
+            } catch (error) {
+              console.warn(
+                "[OtoMusic] secure credential storage unavailable",
+                error instanceof Error ? error.message : error,
+              );
+            }
+
             set({
               session: { ...normalized, baseUrl: url },
               isAuthenticated: true,
@@ -136,6 +171,58 @@ export const useAuthStore = create<AuthState>()(
             lastError instanceof Error ? lastError.message : "登录失败，请检查服务器地址与账号信息",
         }));
         return false;
+      },
+      restoreSecureSession: async () => {
+        const state = get();
+        const persistedSession = state.session;
+        set({ isRestoringSession: true });
+
+        try {
+          const secureSession = await loadSecureSession();
+          const candidate = secureSession ?? (
+            persistedSession?.baseUrl && persistedSession.username && persistedSession.password
+              ? persistedSession
+              : null
+          );
+
+          if (!candidate) {
+            set({
+              isAuthenticated: false,
+              isRestoringSession: false,
+              session: persistedSession ? sanitizeSessionForPersist(persistedSession) : null,
+            });
+            return;
+          }
+
+          const normalized = normalizeSession(candidate);
+          const client = createSubsonicClient(normalized);
+          await client.ping();
+
+          if (!secureSession) {
+            try {
+              await saveSecureSession(normalized);
+            } catch (error) {
+              console.warn(
+                "[OtoMusic] failed to migrate credentials into secure storage",
+                error instanceof Error ? error.message : error,
+              );
+            }
+          }
+
+          set({
+            session: normalized,
+            isAuthenticated: true,
+            isRestoringSession: false,
+            loginError: null,
+          });
+        } catch (error) {
+          set({
+            isAuthenticated: false,
+            isRestoringSession: false,
+            loginError: error instanceof Error ? error.message : "恢复登录状态失败，请重新登录",
+            session: persistedSession ? sanitizeSessionForPersist(persistedSession) : null,
+          });
+        }
       },
       saveServerConfig: (config) => {
         let primaryUrl = "";
@@ -221,6 +308,15 @@ export const useAuthStore = create<AuthState>()(
           });
           await client.ping();
 
+          try {
+            await saveSecureSession({ ...state.session, baseUrl: normalizedUrl });
+          } catch (error) {
+            console.warn(
+              "[OtoMusic] failed to update secure credentials",
+              error instanceof Error ? error.message : error,
+            );
+          }
+
           set({
             session: { ...state.session, baseUrl: normalizedUrl },
             isLoggingIn: false,
@@ -236,10 +332,12 @@ export const useAuthStore = create<AuthState>()(
         }
       },
       logout: () => {
+        void clearSecureSession();
         set({
           session: null,
           isAuthenticated: false,
           isLoggingIn: false,
+          isRestoringSession: false,
           loginError: null,
         });
       },
@@ -247,11 +345,11 @@ export const useAuthStore = create<AuthState>()(
     }),
     {
       name: "otomusic-auth",
-      version: 1,
+      version: 2,
       partialize: (state) => ({
-        session: state.session,
-        isAuthenticated: state.isAuthenticated,
-        serverConfig: state.serverConfig,
+        session: sanitizeSessionForPersist(state.session),
+        isAuthenticated: false,
+        serverConfig: sanitizeServerConfigForPersist(state.serverConfig),
       }),
       migrate: (persisted: unknown, version: number) => {
         if (version === 0 && persisted && typeof persisted === "object") {

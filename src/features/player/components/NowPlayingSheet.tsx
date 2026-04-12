@@ -31,6 +31,7 @@ import { usePlayerStore, type TrackInfo } from "@/stores/player-store";
 import { resolveAudioQuality } from "@/features/player/utils/audio-quality";
 
 import { AppleMusicLyrics } from "./AppleMusicLyrics";
+import { AudioReactiveBackdrop } from "./AudioReactiveBackdrop";
 
 type NowPlayingSheetProps = {
   open: boolean;
@@ -320,10 +321,23 @@ export function NowPlayingSheet({
       className="absolute inset-0 z-[60] overflow-hidden bg-black"
     >
       {/* Background layers */}
-      <div className="absolute inset-0 scale-110">
+      <motion.div
+        className="absolute inset-0 scale-110"
+        animate={{
+          x: [0, 22, -16, 0],
+          y: [0, -18, 14, 0],
+          scale: [1.08, 1.16, 1.1, 1.08],
+          rotate: [0, 1.1, -0.8, 0],
+        }}
+        transition={{
+          duration: 34,
+          repeat: Number.POSITIVE_INFINITY,
+          ease: "easeInOut",
+        }}
+      >
         <div
           className={cn(
-            "absolute inset-0 bg-cover bg-center transition-opacity duration-500",
+            "absolute inset-0 z-0 bg-cover bg-center transition-opacity duration-500",
             backgroundBlurEnabled ? "blur-[56px]" : "blur-none",
             showHighResCover && "opacity-0",
           )}
@@ -334,26 +348,31 @@ export function NowPlayingSheet({
         {canUseHighResCover && highResCoverUrl ? (
           <div
             className={cn(
-              "absolute inset-0 bg-cover bg-center transition-opacity duration-500",
+              "absolute inset-0 z-0 bg-cover bg-center transition-opacity duration-500",
               backgroundBlurEnabled ? "blur-[56px]" : "blur-none",
               showHighResCover ? "opacity-100" : "opacity-0",
             )}
             style={{ backgroundImage: `url(${highResCoverUrl})` }}
           />
         ) : null}
-      </div>
+      </motion.div>
       <div
-        className="absolute inset-0 opacity-75"
+        className="absolute inset-0 z-[1] opacity-75"
         style={{ background: `radial-gradient(circle at 16% 24%, ${ambientColor}, transparent 55%)` }}
       />
       <div
         className={cn(
-          "absolute inset-0 bg-black/42",
+          "absolute inset-0 z-[2] bg-black/18",
           backgroundBlurEnabled ? "backdrop-blur-2xl" : "backdrop-blur-none",
         )}
       />
-      <div className="absolute inset-0 bg-[linear-gradient(150deg,rgba(255,255,255,0.08)_0%,rgba(255,255,255,0)_45%,rgba(0,0,0,0.15)_100%)]" />
-      <div className="absolute inset-0 bg-black/20" />
+      <div className="absolute inset-0 z-[2] bg-[linear-gradient(150deg,rgba(255,255,255,0.08)_0%,rgba(255,255,255,0)_45%,rgba(0,0,0,0.15)_100%)]" />
+      <div className="absolute inset-0 z-[2] bg-black/5" />
+      <AudioReactiveBackdrop
+        ambientColor={ambientColor}
+        isPlaying={isPlaying}
+        backgroundBlurEnabled={backgroundBlurEnabled}
+      />
 
       {/* Content */}
       <div className="relative z-10 flex h-full min-h-0 flex-col">

@@ -1,4 +1,4 @@
-import { app, BrowserWindow, Menu, Tray, globalShortcut, ipcMain } from "electron";
+import { app, BrowserWindow, Menu, Tray, globalShortcut, ipcMain, safeStorage } from "electron";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -19,12 +19,76 @@ type MpvPlayPayload = {
   volume?: number;
   speed?: number;
 };
+type SecureAuthSession = {
+  baseUrl: string;
+  username: string;
+  password: string;
+};
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const devServerUrl = process.env.VITE_DEV_SERVER_URL;
 const rendererHtmlPath = path.resolve(__dirname, "../dist/index.html");
 const preloadPath = path.resolve(__dirname, "./preload.mjs");
+
+function getSecureCredentialsPath() {
+  return path.join(app.getPath("userData"), "secure-auth.json");
+}
+
+async function loadSecureCredentials(): Promise<SecureAuthSession | null> {
+  const credentialsPath = getSecureCredentialsPath();
+  if (!fs.existsSync(credentialsPath) || !safeStorage.isEncryptionAvailable()) {
+    return null;
+  }
+
+  try {
+    const raw = await fs.promises.readFile(credentialsPath, "utf8");
+    const parsed = JSON.parse(raw) as { payload?: string };
+    if (!parsed.payload) {
+      return null;
+    }
+
+    const decrypted = safeStorage.decryptString(Buffer.from(parsed.payload, "base64"));
+    const session = JSON.parse(decrypted) as Partial<SecureAuthSession>;
+    if (!session.baseUrl || !session.username || !session.password) {
+      return null;
+    }
+
+    return {
+      baseUrl: session.baseUrl,
+      username: session.username,
+      password: session.password,
+    };
+  } catch (error) {
+    console.warn("[OtoMusic] failed to load secure credentials", error);
+    return null;
+  }
+}
+
+async function saveSecureCredentials(session: SecureAuthSession) {
+  if (!safeStorage.isEncryptionAvailable()) {
+    throw new Error("系统安全存储不可用，无法保存密码");
+  }
+
+  const credentialsPath = getSecureCredentialsPath();
+  const encrypted = safeStorage.encryptString(JSON.stringify(session));
+  await fs.promises.mkdir(path.dirname(credentialsPath), { recursive: true });
+  await fs.promises.writeFile(
+    credentialsPath,
+    JSON.stringify({ payload: encrypted.toString("base64") }),
+    "utf8",
+  );
+}
+
+async function clearSecureCredentials() {
+  try {
+    await fs.promises.unlink(getSecureCredentialsPath());
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+      console.warn("[OtoMusic] failed to clear secure credentials", error);
+    }
+  }
+}
 
 function applyV8MemoryLimit() {
   const maxOldSpaceMbRaw = process.env.OTOMUSIC_MAX_OLD_SPACE_MB;
@@ -212,6 +276,18 @@ function setupIpc() {
   ipcMain.handle("mpv:get-duration", async () => {
     return await mpvController.getDuration();
   });
+
+  ipcMain.handle("auth:load-secure-session", async () => {
+    return await loadSecureCredentials();
+  });
+
+  ipcMain.handle("auth:save-secure-session", async (_event, session: SecureAuthSession) => {
+    await saveSecureCredentials(session);
+  });
+
+  ipcMain.handle("auth:clear-secure-session", async () => {
+    await clearSecureCredentials();
+  });
 }
 
 function registerGlobalShortcuts() {
@@ -294,7 +370,6 @@ function createTray() {
       showMainWindow();
     });
 
-    console.log("[OtoMusic] tray initialized");
   } catch (error) {
     tray = null;
     console.warn("[OtoMusic] failed to initialize tray", error);
@@ -319,9 +394,14 @@ function createMainWindow() {
     },
   });
 
-  // Always hide instead of quit — background playback continues
+  // Hide to keep background playback alive when the tray is available.
   mainWindow.on("close", (event) => {
     if (isQuitting) {
+      return;
+    }
+
+    if (!tray) {
+      isQuitting = true;
       return;
     }
 

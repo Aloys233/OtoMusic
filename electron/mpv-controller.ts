@@ -212,7 +212,7 @@ export class MpvController {
       "--no-terminal",
       "--force-window=no",
       "--keep-open=yes",
-      "--audio-exclusive=yes",
+      "--audio-exclusive=no",
       "--alsa-resample=no",
       "--replaygain=no",
       "--msg-level=all=no",

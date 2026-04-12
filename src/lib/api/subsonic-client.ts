@@ -63,6 +63,7 @@ type RequestOptions = {
 
 const DEFAULT_API_VERSION = "1.16.1";
 const DEFAULT_CLIENT_NAME = "OtoMusic";
+const DEBUG_LYRICS = false;
 
 export type TimedLyricSyllable = {
   text: string;
@@ -117,6 +118,12 @@ function normalizeLyricText(value: unknown) {
 
 function previewLyricText(value: string, maxLength = 64) {
   return value.slice(0, maxLength).replace(/\n/g, "\\n");
+}
+
+function logLyricsDebug(message: string) {
+  if (DEBUG_LYRICS) {
+    console.debug(message);
+  }
 }
 
 function estimateLineDuration(text: string) {
@@ -525,30 +532,30 @@ export class SubsonicClient {
     songId?: string,
     options: RequestOptions = {},
   ): Promise<LyricsData> {
-    console.log(`[Lyrics] 正在获取歌词: ${artist} - ${title}${songId ? ` (songId=${songId})` : ""}`);
+    logLyricsDebug(`[Lyrics] 正在获取歌词: ${artist} - ${title}${songId ? ` (songId=${songId})` : ""}`);
     const fallbackTexts: string[] = [];
 
     const tryParsePayload = (payload: LyricsApiPayload, source: string): LyricsData | null => {
       const structuredCandidates = collectStructuredLyricsCandidates(payload);
       const textCandidates = collectTextLyricsCandidates(payload);
-      console.log(
+      logLyricsDebug(
         `[Lyrics] ${source}: 结构化源 ${structuredCandidates.length} 个，文本源 ${textCandidates.length} 个`,
       );
 
       for (let i = 0; i < structuredCandidates.length; i++) {
         const parsed = parseStructuredLyrics(structuredCandidates[i]);
         if (parsed && parsed.timedLines.length > 0) {
-          console.log(`[Lyrics] ${source}: 结构化歌词解析成功，提取到 ${parsed.timedLines.length} 行`);
+          logLyricsDebug(`[Lyrics] ${source}: 结构化歌词解析成功，提取到 ${parsed.timedLines.length} 行`);
           return parsed;
         }
       }
 
       for (let i = 0; i < textCandidates.length; i++) {
         const raw = textCandidates[i]!;
-        console.log(`[Lyrics] ${source}: 正在解析文本源 ${i + 1}: ${previewLyricText(raw)}...`);
+        logLyricsDebug(`[Lyrics] ${source}: 正在解析文本源 ${i + 1}: ${previewLyricText(raw)}...`);
         const parsed = parseLrc(raw);
         if (parsed && parsed.timedLines.length > 0) {
-          console.log(`[Lyrics] ${source}: 文本歌词解析成功，提取到 ${parsed.timedLines.length} 行`);
+          logLyricsDebug(`[Lyrics] ${source}: 文本歌词解析成功，提取到 ${parsed.timedLines.length} 行`);
           return parsed;
         }
       }

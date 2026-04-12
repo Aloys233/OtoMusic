@@ -26,6 +26,17 @@ interface ElectronBridge {
   mpvSetSpeed(speed: number): Promise<void>;
   mpvGetTimePos(): Promise<number>;
   mpvGetDuration(): Promise<number>;
+  loadSecureSession(): Promise<{
+    baseUrl: string;
+    username: string;
+    password: string;
+  } | null>;
+  saveSecureSession(session: {
+    baseUrl: string;
+    username: string;
+    password: string;
+  }): Promise<void>;
+  clearSecureSession(): Promise<void>;
   onMpvEnded(handler: () => void): () => void;
   onMpvProperty(handler: (name: "time-pos" | "duration" | "pause", value: unknown) => void): () => void;
 }

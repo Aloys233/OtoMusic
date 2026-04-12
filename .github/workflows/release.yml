@@ -79,6 +79,8 @@ jobs:
             if [ -n "$TAR_PATH" ]; then cp "$TAR_PATH" "artifacts/OtoMusic-${VERSION}-linux-x86_64.tar.gz"; fi
           fi
 
+          (cd artifacts && sha256sum * > "OtoMusic-${VERSION}-${{ matrix.os_name }}-SHA256SUMS.txt")
+
       - name: upload release
         uses: softprops/action-gh-release@v2
         with:
