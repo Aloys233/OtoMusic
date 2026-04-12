@@ -1,4 +1,4 @@
-import { AnimatePresence, motion } from "framer-motion";
+import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import {
   AudioLines,
   ListMusic,
@@ -84,6 +84,7 @@ export function NowPlayingSheet({
   onAlbumClick,
 }: NowPlayingSheetProps) {
   const isDesktop = isElectronRuntime();
+  const shouldReduceMotion = useReducedMotion();
   const dragRegionStyle: CSSProperties | undefined = isDesktop
     ? { WebkitAppRegion: "drag" }
     : undefined;
@@ -317,19 +318,19 @@ export function NowPlayingSheet({
       initial={{ y: "105%" }}
       animate={{ y: 0 }}
       exit={{ y: "105%" }}
-      transition={{ duration: 0.24, ease: [0.22, 1, 0.36, 1] }}
+      transition={shouldReduceMotion ? { duration: 0 } : { duration: 0.24, ease: [0.22, 1, 0.36, 1] }}
       className="absolute inset-0 z-[60] overflow-hidden bg-black"
     >
       {/* Background layers */}
       <motion.div
         className="absolute inset-0 scale-110"
-        animate={{
+        animate={shouldReduceMotion ? undefined : {
           x: [0, 22, -16, 0],
           y: [0, -18, 14, 0],
           scale: [1.08, 1.16, 1.1, 1.08],
           rotate: [0, 1.1, -0.8, 0],
         }}
-        transition={{
+        transition={shouldReduceMotion ? undefined : {
           duration: 34,
           repeat: Number.POSITIVE_INFINITY,
           ease: "easeInOut",
@@ -513,15 +514,15 @@ export function NowPlayingSheet({
                     >
                       <motion.span
                         className="pointer-events-none absolute inset-y-0 right-2 z-[2] w-10 bg-[linear-gradient(90deg,rgba(255,255,255,0)_0%,rgba(255,255,255,0.14)_58%,rgba(255,255,255,0.68)_100%)]"
-                        animate={{ opacity: [0.5, 0.66, 0.5] }}
-                        transition={{ duration: 2.1, repeat: Number.POSITIVE_INFINITY, ease: "easeInOut" }}
+                        animate={shouldReduceMotion ? undefined : { opacity: [0.5, 0.66, 0.5] }}
+                        transition={shouldReduceMotion ? undefined : { duration: 2.1, repeat: Number.POSITIVE_INFINITY, ease: "easeInOut" }}
                       />
                       <span className="pointer-events-none absolute inset-y-0 right-0 z-[3] w-3 rounded-full bg-white" />
                       <span className="pointer-events-none absolute right-0 top-1/2 z-[4] h-2 w-3 -translate-y-1/2">
                         <motion.span
                           className="block h-full w-full rounded-full shadow-[0_0_7px_rgba(255,255,255,0.9),0_0_12px_rgba(255,255,255,0.56)]"
-                          animate={{ opacity: [0.72, 0.9, 0.72] }}
-                          transition={{ duration: 2.1, repeat: Number.POSITIVE_INFINITY, ease: "easeInOut" }}
+                          animate={shouldReduceMotion ? undefined : { opacity: [0.72, 0.9, 0.72] }}
+                          transition={shouldReduceMotion ? undefined : { duration: 2.1, repeat: Number.POSITIVE_INFINITY, ease: "easeInOut" }}
                         />
                       </span>
                     </span>

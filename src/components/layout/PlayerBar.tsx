@@ -389,8 +389,8 @@ export function PlayerBar({
     }
   };
 
-  const trackTitle = currentTrack?.title ?? "FLAC Placeholder Track";
-  const trackArtist = currentTrack?.artist ?? "Unknown Artist";
+  const trackTitle = currentTrack?.title ?? "未选择歌曲";
+  const trackArtist = currentTrack?.artist ?? "未知艺术家";
   const canOpenArtistDetail = Boolean(currentTrack?.artist?.trim()) && Boolean(onArtistClick);
   const canOpenAlbumDetail = Boolean(currentTrack?.albumId) && Boolean(onAlbumClick);
 
@@ -532,7 +532,7 @@ export function PlayerBar({
             onClick={onOpenNowPlaying ?? onToggleNowPlaying}
             disabled={!currentTrack}
             className={cn(
-              "flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden rounded-lg border border-slate-200/80 bg-slate-100 transition-[transform,border-color,background-color] duration-320 ease-in-out hover:scale-[1.02] hover:border-[var(--accent-border)] dark:border-slate-700/70 dark:bg-slate-900",
+              "flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden rounded-lg border border-slate-200/80 bg-slate-100 transition-[transform,border-color,background-color] duration-[320ms] ease-in-out hover:scale-[1.02] hover:border-[var(--accent-border)] dark:border-slate-700/70 dark:bg-slate-900",
               !currentTrack && "cursor-not-allowed opacity-60 hover:border-slate-200/80 dark:hover:border-slate-700/70",
             )}
           >

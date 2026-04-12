@@ -114,7 +114,7 @@ export function WindowTitlebar({
 
       <div className="flex min-w-0 flex-1 items-center justify-end gap-2 pl-2">
         {isAuthenticated && (
-          <div className="relative hidden w-full max-w-md flex-1 sm:block" style={noDragRegionStyle}>
+          <div className="relative w-full min-w-[9rem] max-w-md flex-1" style={noDragRegionStyle}>
             <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
             <Input
               value={searchKeyword}

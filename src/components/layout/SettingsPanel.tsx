@@ -554,7 +554,7 @@ export function SettingsPanel({ open, onClose, updateChecker }: SettingsPanelPro
               <header className="flex items-center justify-between border-b border-slate-200/70 px-4 py-3 dark:border-slate-800/70">
                 <div className="flex items-center gap-3">
                   <div>
-                    <p className="text-xs uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">Settings</p>
+                    <p className="text-xs uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">偏好</p>
                     <h2 className="text-lg font-semibold">偏好设置</h2>
                   </div>
                   {updateChecker.hasUpdate === true && updateChecker.latestVersion ? (

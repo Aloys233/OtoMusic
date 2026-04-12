@@ -25,6 +25,7 @@ import { WindowTitlebar } from "@/components/layout/WindowTitlebar";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { envDefaults } from "@/config/env";
+import { useAllSongs } from "@/features/library/hooks/use-all-songs";
 import { useAlbumList } from "@/features/library/hooks/use-album-list";
 import { useAlbumSongs } from "@/features/library/hooks/use-album-songs";
 import { useGenres } from "@/features/library/hooks/use-genres";
@@ -52,7 +53,7 @@ import { type LibraryNavSection, useLibraryStore } from "@/stores/library-store"
 import { usePlayerStore } from "@/stores/player-store";
 import { useRecentPlayStore } from "@/stores/recent-play-store";
 import { useSettingsStore } from "@/stores/settings-store";
-import type { SubsonicAlbum } from "@/types/subsonic";
+import type { SubsonicAlbum, SubsonicSong } from "@/types/subsonic";
 
 
 type AlbumCard = {
@@ -80,7 +81,7 @@ function toCardItem(album: SubsonicAlbum): AlbumCard {
   return {
     id: album.id,
     title: album.name,
-    artist: album.artist ?? "Unknown Artist",
+    artist: album.artist ?? "未知艺术家",
     genre: album.genre,
     coverArt: album.coverArt,
     songCount: album.songCount,
@@ -107,6 +108,19 @@ function formatDuration(totalSeconds: number) {
   }
 
   return `${minutes} 分钟`;
+}
+
+function getSongArtistNames(song: SubsonicSong) {
+  const names = song.artists
+    ?.map((artist) => artist.name.trim())
+    .filter(Boolean);
+
+  if (names && names.length > 0) {
+    return Array.from(new Set(names));
+  }
+
+  const fallbackName = song.displayArtist?.trim() || song.artist?.trim();
+  return fallbackName ? [fallbackName] : ["未知艺术家"];
 }
 
 function formatDateTime(value: string | undefined) {
@@ -391,13 +405,33 @@ export default function App() {
     () => albumPageData?.pages.flatMap((page) => page) ?? [],
     [albumPageData],
   );
+  const albumIds = useMemo(() => albumData.map((album) => album.id), [albumData]);
+  const isAllSongsCatalogReady = !albumLoading && !albumLoadingMore && !hasMoreAlbumPages;
 
   const {
-    data: songsData = [],
-    isLoading: songsLoading,
-    isError: songsError,
-    error: songsErrorObj,
+    data: albumSongsData = [],
+    isLoading: albumSongsLoading,
+    isError: albumSongsError,
+    error: albumSongsErrorObj,
   } = useAlbumSongs(client, sessionKey, selectedAlbumId);
+  const {
+    data: allSongsData = [],
+    isLoading: allSongsLoading,
+    isFetching: allSongsFetching,
+    isError: allSongsError,
+    error: allSongsErrorObj,
+  } = useAllSongs(
+    client,
+    sessionKey,
+    albumIds,
+    isAllSongsCatalogReady,
+  );
+  const songSourceData = activeNavSection === "songs" ? allSongsData : albumSongsData;
+  const songsLoading = activeNavSection === "songs"
+    ? albumLoading || albumLoadingMore || Boolean(hasMoreAlbumPages) || allSongsLoading || allSongsFetching
+    : albumSongsLoading;
+  const songsError = activeNavSection === "songs" ? allSongsError : albumSongsError;
+  const songsErrorObj = activeNavSection === "songs" ? allSongsErrorObj : albumSongsErrorObj;
   const normalizedSearchKeyword = searchKeyword.trim();
   const normalizedSearchInput = searchInput.trim();
   const normalizedDebouncedSearchInput = debouncedSearchInput.trim();
@@ -518,10 +552,22 @@ export default function App() {
 
   const visibleSongs = useMemo(
     () =>
-      [...songsData].sort(
-        (a, b) => (a.track ?? Number.MAX_SAFE_INTEGER) - (b.track ?? Number.MAX_SAFE_INTEGER),
-      ),
-    [songsData],
+      [...songSourceData].sort((a, b) => {
+        if (activeNavSection === "songs") {
+          const artistGap = (a.artist ?? "").localeCompare(b.artist ?? "");
+          if (artistGap !== 0) {
+            return artistGap;
+          }
+
+          const albumGap = (a.album ?? "").localeCompare(b.album ?? "");
+          if (albumGap !== 0) {
+            return albumGap;
+          }
+        }
+
+        return (a.track ?? Number.MAX_SAFE_INTEGER) - (b.track ?? Number.MAX_SAFE_INTEGER);
+      }),
+    [activeNavSection, songSourceData],
   );
 
   const filteredSongs = useMemo(
@@ -1720,7 +1766,7 @@ export default function App() {
     "recent-added": "按真实播放历史展示最近听过的专辑，便于快速回听。",
     albums: "专辑列表已接入分页与持续拉取，适合大音乐库浏览。",
     artists: "按专辑统计艺人，展示曲目规模与最近发行年份。",
-    songs: "展示当前专辑曲目，支持分页查看与直接点选播放。",
+    songs: "展示库里的所有歌曲，支持分页查看、双击播放与打乱播放。",
     "loved-tracks": "来自服务器收藏/喜欢列表，可直接连续播放。",
     genres: "按音乐风格聚合，快速切到你想听的类型。",
     folders: "显示服务器音乐目录，便于按底层文件结构浏览。",
@@ -2067,7 +2113,7 @@ export default function App() {
           refreshing={isRefreshingLibrary}
         />
 
-        <div className="relative z-10 flex h-full min-h-0 pb-24 pt-14">
+        <div className="relative z-10 flex h-full min-h-0 pb-40 pt-14 md:pb-24">
           <Sidebar
             onNavigateSection={handleNavigateSection}
             onOpenSettings={handleOpenSettingsPanel}
@@ -2091,7 +2137,7 @@ export default function App() {
           <div>
             <div className="mb-2 flex items-center gap-2 text-slate-500 dark:text-slate-300">
               <Disc3 className="h-4 w-4" />
-              <span className="text-xs tracking-[0.2em]">音乐视图</span>
+              <span className="text-xs tracking-[0.2em]">资料库</span>
             </div>
             <div className="flex flex-wrap items-center gap-2.5">
               <h1 className="text-2xl font-semibold tracking-tight">{currentViewTitle}</h1>
@@ -2323,50 +2369,49 @@ export default function App() {
                         .join(" · ");
 
                       return (
-                        <button
-                          key={album.id}
-                          type="button"
-                          onClick={() => handleOpenAlbumDetail(album.id)}
-                          className="group w-[140px] shrink-0 snap-start text-left outline-none"
-                        >
-                          <div className="h-[140px] w-[140px] overflow-hidden rounded-xl border border-slate-200 bg-slate-100 transition-colors group-hover:border-[var(--accent-border)] dark:border-slate-800 dark:bg-slate-900/50">
-                            {coverUrl ? (
-                              <img
-                                src={coverUrl}
-                                alt={`${album.name} cover`}
-                                className="h-full w-full object-cover"
-                                loading="lazy"
-                              />
-                            ) : (
-                              <div className="h-full w-full bg-[radial-gradient(circle_at_20%_20%,rgba(16,185,129,0.24),transparent_40%),radial-gradient(circle_at_80%_80%,rgba(59,130,246,0.2),transparent_42%)]" />
-                            )}
-                          </div>
-                          <div className="mt-2 min-w-0 px-0.5">
-                            <p className="truncate text-sm font-semibold text-slate-900 dark:text-slate-100">
-                              {album.name}
+                        <div key={album.id} className="group w-[140px] shrink-0 snap-start text-left">
+                          <button
+                            type="button"
+                            onClick={() => handleOpenAlbumDetail(album.id)}
+                            className="block w-full text-left outline-none"
+                          >
+                            <div className="h-[140px] w-[140px] overflow-hidden rounded-xl border border-slate-200 bg-slate-100 transition-colors group-hover:border-[var(--accent-border)] dark:border-slate-800 dark:bg-slate-900/50">
+                              {coverUrl ? (
+                                <img
+                                  src={coverUrl}
+                                  alt={`${album.name} cover`}
+                                  className="h-full w-full object-cover"
+                                  loading="lazy"
+                                />
+                              ) : (
+                                <div className="h-full w-full bg-[radial-gradient(circle_at_20%_20%,rgba(16,185,129,0.24),transparent_40%),radial-gradient(circle_at_80%_80%,rgba(59,130,246,0.2),transparent_42%)]" />
+                              )}
+                            </div>
+                            <div className="mt-2 min-w-0 px-0.5">
+                              <p className="truncate text-sm font-semibold text-slate-900 dark:text-slate-100">
+                                {album.name}
+                              </p>
+                              {albumMeta ? (
+                                <p className="mt-0.5 truncate text-[0.68rem] text-slate-400 dark:text-slate-500">
+                                  {albumMeta}
+                                </p>
+                              ) : null}
+                            </div>
+                          </button>
+                          {album.artist ? (
+                            <button
+                              type="button"
+                              onClick={() => handleOpenArtistDetail(album.artist!)}
+                              className="mt-0.5 block max-w-full truncate px-0.5 text-left text-xs text-slate-500 transition-colors hover:text-[var(--accent-text)] hover:underline dark:text-slate-400"
+                            >
+                              {album.artist}
+                            </button>
+                          ) : (
+                            <p className="px-0.5 text-xs text-slate-500 dark:text-slate-400">
+                              未知艺术家
                             </p>
-                            {album.artist ? (
-                              <span
-                                role="button"
-                                tabIndex={0}
-                                onClick={(e) => { e.stopPropagation(); handleOpenArtistDetail(album.artist!); }}
-                                onKeyDown={(e) => { if (e.key === "Enter") { e.stopPropagation(); handleOpenArtistDetail(album.artist!); } }}
-                                className="block truncate text-xs text-slate-500 dark:text-slate-400 transition-colors hover:text-[var(--accent-text)] hover:underline cursor-pointer"
-                              >
-                                {album.artist}
-                              </span>
-                            ) : (
-                              <p className="truncate text-xs text-slate-500 dark:text-slate-400">
-                                Unknown Artist
-                              </p>
-                            )}
-                            {albumMeta ? (
-                              <p className="mt-0.5 truncate text-[0.68rem] text-slate-400 dark:text-slate-500">
-                                {albumMeta}
-                              </p>
-                            ) : null}
-                          </div>
-                        </button>
+                          )}
+                        </div>
                       );
                     })}
                   </div>
@@ -2400,10 +2445,8 @@ export default function App() {
                       </div>
                       <div className="divide-y divide-slate-200/70 dark:divide-slate-800/90">
                         {globalSearchSongs.map((song, index) => (
-                          <button
+                          <div
                             key={song.id}
-                            type="button"
-                            onClick={() => handlePlayGlobalSearchSong(song.id)}
                             className={cn(
                               "group grid w-full grid-cols-[44px_minmax(220px,2.3fr)_minmax(180px,1.45fr)_minmax(180px,1.55fr)_62px] items-center px-4 py-2 text-left outline-none transition-colors duration-150",
                               "hover:bg-slate-100/90 dark:hover:bg-slate-800/60",
@@ -2418,35 +2461,38 @@ export default function App() {
                             )}>
                               {index + 1}
                             </span>
-                            <span className="truncate text-sm font-medium">{song.title}</span>
-                            <span
-                              role="button"
-                              tabIndex={0}
-                              onClick={(e) => { e.stopPropagation(); if (song.artist) handleOpenArtistDetail(song.artist); }}
-                              onKeyDown={(e) => { if (e.key === "Enter") { e.stopPropagation(); if (song.artist) handleOpenArtistDetail(song.artist); } }}
-                              className="truncate text-xs text-slate-500 dark:text-slate-400 transition-colors hover:text-[var(--accent-text)] hover:underline cursor-pointer"
+                            <button
+                              type="button"
+                              onClick={() => handlePlayGlobalSearchSong(song.id)}
+                              className="truncate text-left text-sm font-medium transition-colors hover:text-[var(--accent-text)]"
                             >
-                              {song.artist ?? "Unknown Artist"}
-                            </span>
+                              {song.title}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => { if (song.artist) handleOpenArtistDetail(song.artist); }}
+                              disabled={!song.artist}
+                              className="truncate text-left text-xs text-slate-500 transition-colors hover:text-[var(--accent-text)] hover:underline disabled:cursor-default disabled:hover:no-underline dark:text-slate-400"
+                            >
+                              {song.artist ?? "未知艺术家"}
+                            </button>
                             {song.albumId ? (
-                              <span
-                                role="button"
-                                tabIndex={0}
-                                onClick={(e) => { e.stopPropagation(); handleOpenAlbumDetail(song.albumId!); }}
-                                onKeyDown={(e) => { if (e.key === "Enter") { e.stopPropagation(); handleOpenAlbumDetail(song.albumId!); } }}
-                                className="truncate text-xs text-slate-500 dark:text-slate-400 transition-colors hover:text-[var(--accent-text)] hover:underline cursor-pointer"
+                              <button
+                                type="button"
+                                onClick={() => handleOpenAlbumDetail(song.albumId!)}
+                                className="truncate text-left text-xs text-slate-500 transition-colors hover:text-[var(--accent-text)] hover:underline dark:text-slate-400"
                               >
-                                {song.album ?? "Unknown Album"}
-                              </span>
+                                {song.album ?? "未知专辑"}
+                              </button>
                             ) : (
                               <span className="truncate text-xs text-slate-500 dark:text-slate-400">
-                                {song.album ?? "Unknown Album"}
+                                {song.album ?? "未知专辑"}
                               </span>
                             )}
                             <span className="justify-self-end text-[0.7rem] tabular-nums text-slate-500 dark:text-slate-400">
                               {formatTime(song.duration ?? 0)}
                             </span>
-                          </button>
+                          </div>
                         ))}
                       </div>
                     </div>
@@ -2556,42 +2602,44 @@ export default function App() {
                                   const albumMeta = getAlbumSecondaryMeta(album);
 
                                   return (
-                                    <button
+                                    <div
                                       key={`${section.key}-${album.id}`}
-                                      type="button"
-                                      onClick={() => handleOpenAlbumDetail(album.id)}
                                       className="w-40 shrink-0 overflow-hidden rounded-xl border border-slate-200 bg-white text-left transition-colors hover:border-[var(--accent-border)] dark:border-slate-800 dark:bg-slate-900"
                                     >
-                                      <div className="aspect-square overflow-hidden border-b border-slate-200 dark:border-slate-800">
-                                        {coverUrl ? (
-                                          <img
-                                            src={coverUrl}
-                                            alt={`${album.title} cover`}
-                                            className="h-full w-full object-cover"
-                                            loading="lazy"
-                                          />
-                                        ) : (
-                                          <div className="h-full w-full bg-[radial-gradient(circle_at_20%_20%,rgba(16,185,129,0.24),transparent_40%),radial-gradient(circle_at_80%_80%,rgba(59,130,246,0.2),transparent_42%)]" />
-                                        )}
-                                      </div>
-                                      <div className="p-3">
-                                        <p className="truncate text-sm font-medium">{album.title}</p>
-                                        <span
-                                          role="button"
-                                          tabIndex={0}
-                                          onClick={(e) => { e.stopPropagation(); handleOpenArtistDetail(album.artist); }}
-                                          onKeyDown={(e) => { if (e.key === "Enter") { e.stopPropagation(); handleOpenArtistDetail(album.artist); } }}
-                                          className="block truncate text-xs text-slate-500 dark:text-slate-400 transition-colors hover:text-[var(--accent-text)] hover:underline cursor-pointer"
-                                        >
-                                          {album.artist}
-                                        </span>
-                                        {albumMeta ? (
-                                          <p className="mt-1 truncate text-[0.68rem] text-slate-500 dark:text-slate-400">
-                                            {albumMeta}
-                                          </p>
-                                        ) : null}
-                                      </div>
-                                    </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => handleOpenAlbumDetail(album.id)}
+                                        className="block w-full text-left"
+                                      >
+                                        <div className="aspect-square overflow-hidden border-b border-slate-200 dark:border-slate-800">
+                                          {coverUrl ? (
+                                            <img
+                                              src={coverUrl}
+                                              alt={`${album.title} cover`}
+                                              className="h-full w-full object-cover"
+                                              loading="lazy"
+                                            />
+                                          ) : (
+                                            <div className="h-full w-full bg-[radial-gradient(circle_at_20%_20%,rgba(16,185,129,0.24),transparent_40%),radial-gradient(circle_at_80%_80%,rgba(59,130,246,0.2),transparent_42%)]" />
+                                          )}
+                                        </div>
+                                        <div className="px-3 pt-3">
+                                          <p className="truncate text-sm font-medium">{album.title}</p>
+                                          {albumMeta ? (
+                                            <p className="mt-1 truncate text-[0.68rem] text-slate-500 dark:text-slate-400">
+                                              {albumMeta}
+                                            </p>
+                                          ) : null}
+                                        </div>
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => handleOpenArtistDetail(album.artist)}
+                                        className="mb-3 block max-w-full truncate px-3 text-left text-xs text-slate-500 transition-colors hover:text-[var(--accent-text)] hover:underline dark:text-slate-400"
+                                      >
+                                        {album.artist}
+                                      </button>
+                                    </div>
                                   );
                                 })}
                               </div>
@@ -2714,50 +2762,44 @@ export default function App() {
                               const albumMeta = getAlbumSecondaryMeta(album);
 
                               return (
-                                <button
+                                <div
                                   key={`discover-${section.key}-${album.id}`}
-                                  type="button"
-                                  onClick={() => handleOpenAlbumDetail(album.id)}
                                   className="w-40 shrink-0 overflow-hidden rounded-xl border border-slate-200 bg-white text-left transition-colors hover:border-[var(--accent-border)] dark:border-slate-800 dark:bg-slate-900"
                                 >
-                                  <div className="aspect-square overflow-hidden border-b border-slate-200 dark:border-slate-800">
-                                    {coverUrl ? (
-                                      <img
-                                        src={coverUrl}
-                                        alt={`${album.title} cover`}
-                                        className="h-full w-full object-cover"
-                                        loading="lazy"
-                                      />
-                                    ) : (
-                                      <div className="h-full w-full bg-[radial-gradient(circle_at_20%_20%,rgba(16,185,129,0.24),transparent_40%),radial-gradient(circle_at_80%_80%,rgba(59,130,246,0.2),transparent_42%)]" />
-                                    )}
-                                  </div>
-                                  <div className="p-3">
-                                    <p className="truncate text-sm font-medium">{album.title}</p>
-                                    <span
-                                      role="button"
-                                      tabIndex={0}
-                                      onClick={(event) => {
-                                        event.stopPropagation();
-                                        handleOpenArtistDetail(album.artist);
-                                      }}
-                                      onKeyDown={(event) => {
-                                        if (event.key === "Enter") {
-                                          event.stopPropagation();
-                                          handleOpenArtistDetail(album.artist);
-                                        }
-                                      }}
-                                      className="block truncate text-xs text-slate-500 dark:text-slate-400 transition-colors hover:text-[var(--accent-text)] hover:underline cursor-pointer"
-                                    >
-                                      {album.artist}
-                                    </span>
-                                    {albumMeta ? (
-                                      <p className="mt-1 truncate text-[0.68rem] text-slate-500 dark:text-slate-400">
-                                        {albumMeta}
-                                      </p>
-                                    ) : null}
-                                  </div>
-                                </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleOpenAlbumDetail(album.id)}
+                                    className="block w-full text-left"
+                                  >
+                                    <div className="aspect-square overflow-hidden border-b border-slate-200 dark:border-slate-800">
+                                      {coverUrl ? (
+                                        <img
+                                          src={coverUrl}
+                                          alt={`${album.title} cover`}
+                                          className="h-full w-full object-cover"
+                                          loading="lazy"
+                                        />
+                                      ) : (
+                                        <div className="h-full w-full bg-[radial-gradient(circle_at_20%_20%,rgba(16,185,129,0.24),transparent_40%),radial-gradient(circle_at_80%_80%,rgba(59,130,246,0.2),transparent_42%)]" />
+                                      )}
+                                    </div>
+                                    <div className="px-3 pt-3">
+                                      <p className="truncate text-sm font-medium">{album.title}</p>
+                                    </div>
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleOpenArtistDetail(album.artist)}
+                                    className="block max-w-full truncate px-3 text-left text-xs text-slate-500 transition-colors hover:text-[var(--accent-text)] hover:underline dark:text-slate-400"
+                                  >
+                                    {album.artist}
+                                  </button>
+                                  {albumMeta ? (
+                                    <p className="px-3 pb-3 pt-1 truncate text-[0.68rem] text-slate-500 dark:text-slate-400">
+                                      {albumMeta}
+                                    </p>
+                                  ) : null}
+                                </div>
                               );
                             })}
                           </div>
@@ -3090,10 +3132,8 @@ export default function App() {
                                 </div>
                                 <div className="divide-y divide-slate-200/70 dark:divide-slate-800/90">
                                   {artistDetailSongs.map((song, index) => (
-                                    <button
+                                    <div
                                       key={song.id}
-                                      type="button"
-                                      onClick={() => handlePlayArtistDetailSong(song.id)}
                                       className={cn(
                                         "group grid w-full grid-cols-[44px_minmax(220px,2.3fr)_minmax(180px,1.45fr)_minmax(180px,1.55fr)_62px] items-center px-4 py-2 text-left outline-none transition-colors duration-150",
                                         "hover:bg-slate-100/90 dark:hover:bg-slate-800/60",
@@ -3108,35 +3148,38 @@ export default function App() {
                                       )}>
                                         {index + 1}
                                       </span>
-                                      <span className="truncate text-sm font-medium">{song.title}</span>
-                                      <span
-                                        role="button"
-                                        tabIndex={0}
-                                        onClick={(e) => { e.stopPropagation(); if (song.artist) handleOpenArtistDetail(song.artist); }}
-                                        onKeyDown={(e) => { if (e.key === "Enter") { e.stopPropagation(); if (song.artist) handleOpenArtistDetail(song.artist); } }}
-                                        className="truncate text-xs text-slate-500 dark:text-slate-400 transition-colors hover:text-[var(--accent-text)] hover:underline cursor-pointer"
+                                      <button
+                                        type="button"
+                                        onClick={() => handlePlayArtistDetailSong(song.id)}
+                                        className="truncate text-left text-sm font-medium transition-colors hover:text-[var(--accent-text)]"
                                       >
-                                        {song.artist ?? "Unknown Artist"}
-                                      </span>
+                                        {song.title}
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => { if (song.artist) handleOpenArtistDetail(song.artist); }}
+                                        disabled={!song.artist}
+                                        className="truncate text-left text-xs text-slate-500 transition-colors hover:text-[var(--accent-text)] hover:underline disabled:cursor-default disabled:hover:no-underline dark:text-slate-400"
+                                      >
+                                        {song.artist ?? "未知艺术家"}
+                                      </button>
                                       {song.albumId ? (
-                                        <span
-                                          role="button"
-                                          tabIndex={0}
-                                          onClick={(e) => { e.stopPropagation(); handleOpenAlbumDetail(song.albumId!); }}
-                                          onKeyDown={(e) => { if (e.key === "Enter") { e.stopPropagation(); handleOpenAlbumDetail(song.albumId!); } }}
-                                          className="truncate text-xs text-slate-500 dark:text-slate-400 transition-colors hover:text-[var(--accent-text)] hover:underline cursor-pointer"
+                                        <button
+                                          type="button"
+                                          onClick={() => handleOpenAlbumDetail(song.albumId!)}
+                                          className="truncate text-left text-xs text-slate-500 transition-colors hover:text-[var(--accent-text)] hover:underline dark:text-slate-400"
                                         >
-                                          {song.album ?? "Unknown Album"}
-                                        </span>
+                                          {song.album ?? "未知专辑"}
+                                        </button>
                                       ) : (
                                         <span className="truncate text-xs text-slate-500 dark:text-slate-400">
-                                          {song.album ?? "Unknown Album"}
+                                          {song.album ?? "未知专辑"}
                                         </span>
                                       )}
                                       <span className="justify-self-end text-[0.7rem] tabular-nums text-slate-500 dark:text-slate-400">
                                         {formatTime(song.duration ?? 0)}
                                       </span>
-                                    </button>
+                                    </div>
                                   ))}
                                 </div>
                               </div>
@@ -3277,10 +3320,8 @@ export default function App() {
                                 </div>
                                 <div className="divide-y divide-slate-200/70 dark:divide-slate-800/90">
                                   {selectedPlaylistSongs.map((song, index) => (
-                                    <button
+                                    <div
                                       key={`playlist-song-${song.id}-${index}`}
-                                      type="button"
-                                      onClick={() => handlePlayPlaylistSong(song.id)}
                                       className={cn(
                                         "group grid w-full grid-cols-[44px_minmax(220px,2.3fr)_minmax(180px,1.45fr)_minmax(180px,1.55fr)_62px] items-center px-4 py-2 text-left outline-none transition-colors duration-150",
                                         "hover:bg-slate-100/90 dark:hover:bg-slate-800/60",
@@ -3295,51 +3336,38 @@ export default function App() {
                                       )}>
                                         {index + 1}
                                       </span>
-                                      <span className="truncate text-sm font-medium">{song.title}</span>
-                                      <span
-                                        role="button"
-                                        tabIndex={0}
-                                        onClick={(event) => {
-                                          event.stopPropagation();
-                                          if (song.artist) handleOpenArtistDetail(song.artist);
-                                        }}
-                                        onKeyDown={(event) => {
-                                          if (event.key === "Enter") {
-                                            event.stopPropagation();
-                                            if (song.artist) handleOpenArtistDetail(song.artist);
-                                          }
-                                        }}
-                                        className="truncate text-xs text-slate-500 dark:text-slate-400 transition-colors hover:text-[var(--accent-text)] hover:underline cursor-pointer"
+                                      <button
+                                        type="button"
+                                        onClick={() => handlePlayPlaylistSong(song.id)}
+                                        className="truncate text-left text-sm font-medium transition-colors hover:text-[var(--accent-text)]"
                                       >
-                                        {song.artist ?? "Unknown Artist"}
-                                      </span>
+                                        {song.title}
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => { if (song.artist) handleOpenArtistDetail(song.artist); }}
+                                        disabled={!song.artist}
+                                        className="truncate text-left text-xs text-slate-500 transition-colors hover:text-[var(--accent-text)] hover:underline disabled:cursor-default disabled:hover:no-underline dark:text-slate-400"
+                                      >
+                                        {song.artist ?? "未知艺术家"}
+                                      </button>
                                       {song.albumId ? (
-                                        <span
-                                          role="button"
-                                          tabIndex={0}
-                                          onClick={(event) => {
-                                            event.stopPropagation();
-                                            handleOpenAlbumDetail(song.albumId!);
-                                          }}
-                                          onKeyDown={(event) => {
-                                            if (event.key === "Enter") {
-                                              event.stopPropagation();
-                                              handleOpenAlbumDetail(song.albumId!);
-                                            }
-                                          }}
-                                          className="truncate text-xs text-slate-500 dark:text-slate-400 transition-colors hover:text-[var(--accent-text)] hover:underline cursor-pointer"
+                                        <button
+                                          type="button"
+                                          onClick={() => handleOpenAlbumDetail(song.albumId!)}
+                                          className="truncate text-left text-xs text-slate-500 transition-colors hover:text-[var(--accent-text)] hover:underline dark:text-slate-400"
                                         >
-                                          {song.album ?? "Unknown Album"}
-                                        </span>
+                                          {song.album ?? "未知专辑"}
+                                        </button>
                                       ) : (
                                         <span className="truncate text-xs text-slate-500 dark:text-slate-400">
-                                          {song.album ?? "Unknown Album"}
+                                          {song.album ?? "未知专辑"}
                                         </span>
                                       )}
                                       <span className="justify-self-end text-[0.7rem] tabular-nums text-slate-500 dark:text-slate-400">
                                         {formatTime(song.duration ?? 0)}
                                       </span>
-                                    </button>
+                                    </div>
                                   ))}
                                 </div>
                               </div>
@@ -3362,29 +3390,27 @@ export default function App() {
                 <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                   <div className="flex items-center gap-2">
                     <Music2 className="h-4 w-4 text-slate-500" />
-                    <h2 className="text-sm font-medium">歌曲列表</h2>
+                    <div>
+                      <h2 className="text-sm font-medium">全部歌曲</h2>
+                      <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
+                        {songsLoading ? "正在同步全库歌曲..." : `共 ${filteredSongs.length} 首歌曲`}
+                      </p>
+                    </div>
                   </div>
 
                   <div className="flex flex-wrap items-center gap-2">
-                    <select
-                      value={selectedAlbumId ?? ""}
-                      onChange={(event) => setSelectedAlbumId(event.target.value || null)}
-                      className="h-9 min-w-[220px] rounded-lg border border-slate-200 bg-white px-3 text-sm outline-none transition-colors focus:border-[var(--accent-border)] dark:border-slate-700 dark:bg-slate-900"
+                    <Button
+                      size="sm"
+                      onClick={handlePlayAlbumAll}
+                      disabled={songsLoading || visibleSongs.length === 0}
                     >
-                      {albumCards.map((album) => (
-                        <option key={`song-view-${album.id}`} value={album.id}>
-                          {album.title} · {album.artist}
-                        </option>
-                      ))}
-                    </select>
-                    <Button size="sm" onClick={handlePlayAlbumAll} disabled={visibleSongs.length === 0}>
                       播放全部
                     </Button>
                     <Button
                       size="sm"
                       variant="outline"
                       onClick={handleShuffleAlbum}
-                      disabled={visibleSongs.length === 0}
+                      disabled={songsLoading || visibleSongs.length === 0}
                     >
                       <Shuffle className="mr-1.5 h-3.5 w-3.5" />
                       打乱播放
@@ -3410,7 +3436,8 @@ export default function App() {
                               id={song.id}
                               index={songPageStart + index}
                               title={song.title}
-                              artist={song.artist ?? "Unknown Artist"}
+                              artist={getSongArtistNames(song).join(" / ")}
+                              artistNames={getSongArtistNames(song)}
                               duration={formatTime(song.duration ?? 0)}
                               isPlaying={currentTrackId === song.id}
                               onClick={handlePlaySong}
@@ -3443,7 +3470,7 @@ export default function App() {
                         </>
                       ) : (
                         <div className="flex h-24 items-center justify-center rounded-lg text-sm text-slate-500">
-                          当前专辑没有可显示歌曲
+                          没有可显示歌曲
                         </div>
                       )}
                     </div>
@@ -3483,7 +3510,8 @@ export default function App() {
                               id={song.id}
                               index={index}
                               title={song.title}
-                              artist={song.artist ?? "Unknown Artist"}
+                              artist={getSongArtistNames(song).join(" / ")}
+                              artistNames={getSongArtistNames(song)}
                               duration={formatTime(song.duration ?? 0)}
                               isPlaying={currentTrackId === song.id}
                               onClick={handlePlayLovedTrack}
@@ -3667,7 +3695,7 @@ export default function App() {
                             </button>
                           ) : (
                             <p className="mt-1.5 text-sm text-slate-600 dark:text-slate-300">
-                              Unknown Artist
+                              未知艺术家
                             </p>
                           )}
 
@@ -3756,10 +3784,8 @@ export default function App() {
                               });
 
                               return (
-                                <button
+                                <div
                                   key={song.id}
-                                  type="button"
-                                  onClick={() => handlePlaySong(song.id)}
                                   className={cn(
                                     "group grid w-full grid-cols-[44px_minmax(200px,2.2fr)_minmax(140px,1.1fr)_minmax(140px,1.1fr)_minmax(170px,1.25fr)_62px] items-center px-4 py-2 text-left outline-none transition-colors duration-150",
                                     "hover:bg-slate-100/90 dark:hover:bg-slate-800/60",
@@ -3776,29 +3802,32 @@ export default function App() {
                                   >
                                     {songPageStart + index + 1}
                                   </span>
-                                  <span className="truncate text-sm font-medium">{song.title}</span>
-                                  <span
-                                    role="button"
-                                    tabIndex={0}
-                                    onClick={(e) => { e.stopPropagation(); if (song.artist) handleOpenArtistDetail(song.artist); }}
-                                    onKeyDown={(e) => { if (e.key === "Enter") { e.stopPropagation(); if (song.artist) handleOpenArtistDetail(song.artist); } }}
-                                    className="truncate text-xs text-slate-500 dark:text-slate-400 transition-colors hover:text-[var(--accent-text)] hover:underline cursor-pointer"
+                                  <button
+                                    type="button"
+                                    onClick={() => handlePlaySong(song.id)}
+                                    className="truncate text-left text-sm font-medium transition-colors hover:text-[var(--accent-text)]"
                                   >
-                                    {song.artist ?? "Unknown Artist"}
-                                  </span>
+                                    {song.title}
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => { if (song.artist) handleOpenArtistDetail(song.artist); }}
+                                    disabled={!song.artist}
+                                    className="truncate text-left text-xs text-slate-500 transition-colors hover:text-[var(--accent-text)] hover:underline disabled:cursor-default disabled:hover:no-underline dark:text-slate-400"
+                                  >
+                                    {song.artist ?? "未知艺术家"}
+                                  </button>
                                   {song.albumId ? (
-                                    <span
-                                      role="button"
-                                      tabIndex={0}
-                                      onClick={(e) => { e.stopPropagation(); handleOpenAlbumDetail(song.albumId!); }}
-                                      onKeyDown={(e) => { if (e.key === "Enter") { e.stopPropagation(); handleOpenAlbumDetail(song.albumId!); } }}
-                                      className="truncate text-xs text-slate-500 dark:text-slate-400 transition-colors hover:text-[var(--accent-text)] hover:underline cursor-pointer"
+                                    <button
+                                      type="button"
+                                      onClick={() => handleOpenAlbumDetail(song.albumId!)}
+                                      className="truncate text-left text-xs text-slate-500 transition-colors hover:text-[var(--accent-text)] hover:underline dark:text-slate-400"
                                     >
-                                      {song.album ?? "Unknown Album"}
-                                    </span>
+                                      {song.album ?? "未知专辑"}
+                                    </button>
                                   ) : (
                                     <span className="truncate text-xs text-slate-500 dark:text-slate-400">
-                                      {song.album ?? "Unknown Album"}
+                                      {song.album ?? "未知专辑"}
                                     </span>
                                   )}
                                   <span className="truncate text-[0.68rem] tabular-nums text-slate-400 dark:text-slate-500">
@@ -3824,7 +3853,7 @@ export default function App() {
                                   <span className="justify-self-end text-[0.7rem] tabular-nums text-slate-500 dark:text-slate-400">
                                     {formatTime(song.duration ?? 0)}
                                   </span>
-                                </button>
+                                </div>
                               );
                             })}
                           </div>

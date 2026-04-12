@@ -1,4 +1,4 @@
-import { motion, useMotionTemplate, useMotionValue, useTransform } from "framer-motion";
+import { motion, useMotionTemplate, useMotionValue, useReducedMotion, useTransform } from "framer-motion";
 import { type CSSProperties, useEffect, useRef } from "react";
 
 import { audioEngine } from "@/lib/audio/AudioEngine";
@@ -41,8 +41,18 @@ export function AudioReactiveBackdrop({
   const treble = useMotionValue(0);
   const pulse = useMotionValue(0);
   const stateRef = useRef<ReactiveFrameState>({ ...IDLE_TARGET });
+  const shouldReduceMotion = useReducedMotion();
 
   useEffect(() => {
+    if (shouldReduceMotion) {
+      energy.set(0);
+      bass.set(0);
+      mid.set(0);
+      treble.set(0);
+      pulse.set(0);
+      return;
+    }
+
     let frameId = 0;
 
     const tick = () => {
@@ -72,7 +82,7 @@ export function AudioReactiveBackdrop({
 
     frameId = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(frameId);
-  }, [bass, energy, isPlaying, mid, pulse, treble]);
+  }, [bass, energy, isPlaying, mid, pulse, shouldReduceMotion, treble]);
 
   const ambientOpacity = useTransform(energy, [0, 1], [0.2, 0.56]);
 
@@ -130,12 +140,12 @@ export function AudioReactiveBackdrop({
 
       <motion.div
         className="np-audio-orb-shell np-audio-orb-shell-1"
-        animate={{
+        animate={shouldReduceMotion ? undefined : {
           x: [0, 116, -74, 42, 0],
           y: [0, 66, -44, 18, 0],
           rotate: [0, 10, -8, 4, 0],
         }}
-        transition={{
+        transition={shouldReduceMotion ? undefined : {
           duration: 22,
           repeat: Number.POSITIVE_INFINITY,
           ease: "easeInOut",
@@ -150,11 +160,11 @@ export function AudioReactiveBackdrop({
             y: orbOneY,
             filter: orbOneFilter,
           }}
-          animate={{
+          animate={shouldReduceMotion ? undefined : {
             rotate: [0, 24, 0, -18, 0],
             backgroundPosition: ["38% 34%", "62% 60%", "42% 48%", "38% 34%"],
           }}
-          transition={{
+          transition={shouldReduceMotion ? undefined : {
             duration: 20,
             repeat: Number.POSITIVE_INFINITY,
             ease: "easeInOut",
@@ -164,12 +174,12 @@ export function AudioReactiveBackdrop({
 
       <motion.div
         className="np-audio-orb-shell np-audio-orb-shell-2"
-        animate={{
+        animate={shouldReduceMotion ? undefined : {
           x: [0, -112, 58, -24, 0],
           y: [0, 54, -38, 20, 0],
           rotate: [0, -11, 8, -4, 0],
         }}
-        transition={{
+        transition={shouldReduceMotion ? undefined : {
           duration: 25,
           repeat: Number.POSITIVE_INFINITY,
           ease: "easeInOut",
@@ -184,11 +194,11 @@ export function AudioReactiveBackdrop({
             y: orbTwoY,
             filter: orbTwoFilter,
           }}
-          animate={{
+          animate={shouldReduceMotion ? undefined : {
             rotate: [0, -22, 0, 16, 0],
             backgroundPosition: ["30% 30%", "64% 58%", "46% 42%", "30% 30%"],
           }}
-          transition={{
+          transition={shouldReduceMotion ? undefined : {
             duration: 22,
             repeat: Number.POSITIVE_INFINITY,
             ease: "easeInOut",
@@ -198,12 +208,12 @@ export function AudioReactiveBackdrop({
 
       <motion.div
         className="np-audio-orb-shell np-audio-orb-shell-3"
-        animate={{
+        animate={shouldReduceMotion ? undefined : {
           x: [0, 98, -66, 26, 0],
           y: [0, -62, 40, -20, 0],
           rotate: [0, 12, -8, 5, 0],
         }}
-        transition={{
+        transition={shouldReduceMotion ? undefined : {
           duration: 24,
           repeat: Number.POSITIVE_INFINITY,
           ease: "easeInOut",
@@ -218,11 +228,11 @@ export function AudioReactiveBackdrop({
             y: orbThreeY,
             filter: orbThreeFilter,
           }}
-          animate={{
+          animate={shouldReduceMotion ? undefined : {
             rotate: [0, 20, 0, -15, 0],
             backgroundPosition: ["44% 36%", "68% 62%", "48% 46%", "44% 36%"],
           }}
-          transition={{
+          transition={shouldReduceMotion ? undefined : {
             duration: 21,
             repeat: Number.POSITIVE_INFINITY,
             ease: "easeInOut",
