@@ -25,7 +25,7 @@ import type { UpdateCheckerResult } from "@/hooks/use-update-checker";
 import { createSubsonicClient } from "@/lib/api/client";
 import { audioEngine } from "@/lib/audio/AudioEngine";
 import { isElectronRuntime, updateGlobalShortcuts } from "@/lib/desktop-api";
-import { normalizeServerBaseUrl } from "@/lib/server-url";
+import { getServerNetworkLabel, normalizeServerBaseUrl } from "@/lib/server-url";
 import { cn } from "@/lib/utils";
 import { useAuthStore } from "@/stores/auth-store";
 import {
@@ -161,6 +161,9 @@ export function SettingsPanel({ open, onClose, updateChecker }: SettingsPanelPro
   const nowPlayingBackgroundBlurEnabled = useSettingsStore(
     (state) => state.nowPlayingBackgroundBlurEnabled,
   );
+  const nowPlayingDynamicBackgroundEnabled = useSettingsStore(
+    (state) => state.nowPlayingDynamicBackgroundEnabled,
+  );
   const maxCacheGb = useSettingsStore((state) => state.maxCacheGb);
   const globalShortcutsEnabled = useSettingsStore((state) => state.globalShortcutsEnabled);
   const playPauseShortcut = useSettingsStore((state) => state.playPauseShortcut);
@@ -175,6 +178,7 @@ export function SettingsPanel({ open, onClose, updateChecker }: SettingsPanelPro
   const replayGainMode = useSettingsStore((state) => state.replayGainMode);
   const playbackSpeed = useSettingsStore((state) => state.playbackSpeed);
   const fadeDurationSec = useSettingsStore((state) => state.fadeDurationSec);
+  const autoplaySimilarEnabled = useSettingsStore((state) => state.autoplaySimilarEnabled);
 
   const setOutputDeviceId = useSettingsStore((state) => state.setOutputDeviceId);
   const setAudioPassthroughEnabled = useSettingsStore((state) => state.setAudioPassthroughEnabled);
@@ -196,6 +200,9 @@ export function SettingsPanel({ open, onClose, updateChecker }: SettingsPanelPro
   const setNowPlayingBackgroundBlurEnabled = useSettingsStore(
     (state) => state.setNowPlayingBackgroundBlurEnabled,
   );
+  const setNowPlayingDynamicBackgroundEnabled = useSettingsStore(
+    (state) => state.setNowPlayingDynamicBackgroundEnabled,
+  );
   const setMaxCacheGb = useSettingsStore((state) => state.setMaxCacheGb);
   const setGlobalShortcutsEnabled = useSettingsStore((state) => state.setGlobalShortcutsEnabled);
   const setPlayPauseShortcut = useSettingsStore((state) => state.setPlayPauseShortcut);
@@ -210,6 +217,7 @@ export function SettingsPanel({ open, onClose, updateChecker }: SettingsPanelPro
   const setReplayGainMode = useSettingsStore((state) => state.setReplayGainMode);
   const setPlaybackSpeed = useSettingsStore((state) => state.setPlaybackSpeed);
   const setFadeDurationSec = useSettingsStore((state) => state.setFadeDurationSec);
+  const setAutoplaySimilarEnabled = useSettingsStore((state) => state.setAutoplaySimilarEnabled);
 
   const session = useAuthStore((state) => state.session);
   const isAuthenticated = useAuthStore((state) => state.isAuthenticated);
@@ -241,8 +249,13 @@ export function SettingsPanel({ open, onClose, updateChecker }: SettingsPanelPro
     if (!session?.password) {
       return null;
     }
-    return createSubsonicClient(session);
-  }, [session]);
+    return createSubsonicClient({
+      ...session,
+      fallbackUrls: serverConfig
+        ? [serverConfig.primaryUrl, ...serverConfig.fallbackUrls].filter((url) => url !== session.baseUrl)
+        : undefined,
+    });
+  }, [serverConfig, session]);
 
   const cacheManager = useCacheManager();
   const cacheRefresh = cacheManager.refresh;
@@ -716,6 +729,12 @@ export function SettingsPanel({ open, onClose, updateChecker }: SettingsPanelPro
                       enabled={nowPlayingBackgroundBlurEnabled}
                       onChange={setNowPlayingBackgroundBlurEnabled}
                     />
+                    <ToggleRow
+                      label="播放页动态背景"
+                      description="关闭音频响应背景和背景闪光"
+                      enabled={nowPlayingDynamicBackgroundEnabled}
+                      onChange={setNowPlayingDynamicBackgroundEnabled}
+                    />
                   </div>
                 </section>
                 )}
@@ -775,6 +794,13 @@ export function SettingsPanel({ open, onClose, updateChecker }: SettingsPanelPro
                       description="绕过 ReplayGain、播放增益和图形均衡器"
                       enabled={audioPassthroughEnabled}
                       onChange={setAudioPassthroughEnabled}
+                    />
+
+                    <ToggleRow
+                      label="自动连播"
+                      description="队列快结束时，按当前歌曲的流派、作者和专辑补充相近歌曲"
+                      enabled={autoplaySimilarEnabled}
+                      onChange={setAutoplaySimilarEnabled}
                     />
 
                     {audioPassthroughEnabled ? (
@@ -930,6 +956,9 @@ export function SettingsPanel({ open, onClose, updateChecker }: SettingsPanelPro
 
                     <div>
                       <p className="mb-2 text-xs font-medium text-slate-600 dark:text-slate-300">响度均衡 (ReplayGain)</p>
+                      <p className="mb-2 text-[11px] text-slate-500 dark:text-slate-400">
+                        标准目标 89 dB；防削波会限制正向增益，避免超过 0 dBFS。
+                      </p>
                       <div className="grid grid-cols-3 gap-2">
                         {replayGainOptions.map((option) => {
                           const selected = replayGainMode === option.value;
@@ -1088,6 +1117,9 @@ export function SettingsPanel({ open, onClose, updateChecker }: SettingsPanelPro
                               <div className="min-w-0">
                                 <div className="flex items-center gap-1.5">
                                   <span className="shrink-0 rounded bg-slate-200 px-1 py-0.5 text-[9px] font-medium dark:bg-slate-700">主</span>
+                                  <span className="shrink-0 rounded bg-slate-100 px-1 py-0.5 text-[9px] text-slate-500 dark:bg-slate-800 dark:text-slate-400">
+                                    {getServerNetworkLabel(serverConfig.primaryUrl)}
+                                  </span>
                                   <p className="truncate text-[11px]">{serverConfig.primaryUrl}</p>
                                 </div>
                               </div>
@@ -1118,6 +1150,9 @@ export function SettingsPanel({ open, onClose, updateChecker }: SettingsPanelPro
                                 <div className="min-w-0">
                                   <div className="flex items-center gap-1.5">
                                     <span className="shrink-0 rounded bg-slate-100 px-1 py-0.5 text-[9px] text-slate-500 dark:bg-slate-800 dark:text-slate-400">备</span>
+                                    <span className="shrink-0 rounded bg-slate-100 px-1 py-0.5 text-[9px] text-slate-500 dark:bg-slate-800 dark:text-slate-400">
+                                      {getServerNetworkLabel(url)}
+                                    </span>
                                     <p className="truncate text-[11px]">{url}</p>
                                   </div>
                                 </div>

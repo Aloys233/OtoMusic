@@ -52,15 +52,28 @@ const repeatModeMap = {
 } as const;
 
 function buildReplayGainOptions(
-  track: { trackGainDb?: number; albumGainDb?: number } | undefined | null,
+  track: {
+    trackGainDb?: number;
+    albumGainDb?: number;
+    trackPeak?: number;
+    albumPeak?: number;
+  } | undefined | null,
   mode: ReplayGainMode,
 ) {
   if (mode === "off") {
-    return { trackGainDb: 0, albumGainDb: 0, preferAlbumGain: false };
+    return {
+      trackGainDb: 0,
+      albumGainDb: 0,
+      trackPeak: undefined,
+      albumPeak: undefined,
+      preferAlbumGain: false,
+    };
   }
   return {
     trackGainDb: track?.trackGainDb,
     albumGainDb: track?.albumGainDb,
+    trackPeak: track?.trackPeak,
+    albumPeak: track?.albumPeak,
     preferAlbumGain: mode === "album",
   };
 }
@@ -138,6 +151,7 @@ export function PlayerBar({
 
   const fallbackDuration = 225;
   const duration = Math.max(1, currentTrack?.duration ?? fallbackDuration);
+  const volumePercent = Math.round(volume * 100);
   const effectiveStreamUrl = useMemo(() => {
     if (!currentTrack?.streamUrl) {
       return "";
@@ -180,6 +194,8 @@ export function PlayerBar({
     currentTrack?.id,
     currentTrack?.trackGainDb,
     currentTrack?.albumGainDb,
+    currentTrack?.trackPeak,
+    currentTrack?.albumPeak,
     effectiveStreamUrl,
     isPlaying,
     replayGainMode,
@@ -215,7 +231,7 @@ export function PlayerBar({
       if (timeRef.current) timeRef.current.textContent = formatTime(safeT);
 
       // Sync to store every ~1s (infrequent, won't cause jank)
-      if (t - lastStoreSync >= 1) {
+      if (Math.abs(t - lastStoreSync) >= 1) {
         lastStoreSync = t;
         setProgress(t);
       }
@@ -277,6 +293,8 @@ export function PlayerBar({
   }, [
     currentTrack?.albumGainDb,
     currentTrack?.trackGainDb,
+    currentTrack?.albumPeak,
+    currentTrack?.trackPeak,
     effectiveStreamUrl,
     playNext,
     replayGainMode,
@@ -672,12 +690,15 @@ export function PlayerBar({
         <div className="flex items-center justify-end gap-2.5 sm:gap-3">
           <Volume2 className="hidden h-4 w-4 text-slate-600 dark:text-slate-300 sm:block" />
           <Slider
-            value={[Math.round(volume * 100)]}
+            value={[volumePercent]}
             max={100}
             step={1}
             className="w-20 sm:w-28"
             onValueChange={handleVolumeChange}
           />
+          <span className="w-10 text-right text-[11px] tabular-nums text-slate-500 dark:text-slate-400">
+            {volumePercent}%
+          </span>
           <Button
             size="icon"
             variant="ghost"

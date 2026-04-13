@@ -1,6 +1,7 @@
 import axios, { type AxiosInstance } from "axios";
 import SparkMD5 from "spark-md5";
 
+import { sortServerUrlsByNetwork } from "@/lib/server-url";
 import type {
   SubsonicAlbum,
   SubsonicArtistInfo2,
@@ -629,7 +630,7 @@ export class SubsonicClient {
     } catch (error) {
       if (!this.isNetworkError(error) || this.fallbackUrls.length === 0) throw error;
 
-      const candidates = [this.normalizedBaseUrl, ...this.fallbackUrls].filter(
+      const candidates = sortServerUrlsByNetwork([this.normalizedBaseUrl, ...this.fallbackUrls]).filter(
         (u) => u !== this.activeBaseUrl,
       );
 

@@ -45,6 +45,7 @@ type NowPlayingSheetProps = {
   showTranslatedLyrics?: boolean;
   showRomanizedLyrics?: boolean;
   backgroundBlurEnabled?: boolean;
+  dynamicBackgroundEnabled?: boolean;
   highResCoverUrl?: string | null;
   onClose: () => void;
   onSelectTrack: (trackId: string) => void;
@@ -77,6 +78,7 @@ export function NowPlayingSheet({
   showTranslatedLyrics = true,
   showRomanizedLyrics = true,
   backgroundBlurEnabled = true,
+  dynamicBackgroundEnabled = true,
   highResCoverUrl,
   onClose,
   onSelectTrack,
@@ -120,6 +122,7 @@ export function NowPlayingSheet({
   // Progress bar refs for direct DOM manipulation
   const seekBarRef = useRef<HTMLButtonElement>(null);
   const fillRef = useRef<HTMLSpanElement>(null);
+  const progressHeadRef = useRef<HTMLSpanElement>(null);
   const timeRef = useRef<HTMLSpanElement>(null);
   const isSeekingRef = useRef(false);
   const seekPreviewSecondsRef = useRef<number | null>(null);
@@ -159,7 +162,13 @@ export function NowPlayingSheet({
     (seconds: number) => {
       const safeSeconds = Math.min(Math.max(0, seconds), duration);
       const pct = (safeSeconds / duration) * 100;
-      if (fillRef.current) fillRef.current.style.width = `${pct}%`;
+      if (fillRef.current) {
+        fillRef.current.style.width = `${pct}%`;
+        fillRef.current.style.minWidth = pct <= 0 ? "0px" : "0.5rem";
+      }
+      if (progressHeadRef.current) {
+        progressHeadRef.current.style.opacity = pct <= 0 ? "0" : "1";
+      }
       if (timeRef.current) timeRef.current.textContent = formatTime(safeSeconds);
     },
     [duration],
@@ -324,13 +333,13 @@ export function NowPlayingSheet({
       {/* Background layers */}
       <motion.div
         className="absolute inset-0 scale-110"
-        animate={shouldReduceMotion ? undefined : {
+        animate={shouldReduceMotion || !dynamicBackgroundEnabled ? undefined : {
           x: [0, 22, -16, 0],
           y: [0, -18, 14, 0],
           scale: [1.08, 1.16, 1.1, 1.08],
           rotate: [0, 1.1, -0.8, 0],
         }}
-        transition={shouldReduceMotion ? undefined : {
+        transition={shouldReduceMotion || !dynamicBackgroundEnabled ? undefined : {
           duration: 34,
           repeat: Number.POSITIVE_INFINITY,
           ease: "easeInOut",
@@ -369,11 +378,13 @@ export function NowPlayingSheet({
       />
       <div className="absolute inset-0 z-[2] bg-[linear-gradient(150deg,rgba(255,255,255,0.08)_0%,rgba(255,255,255,0)_45%,rgba(0,0,0,0.15)_100%)]" />
       <div className="absolute inset-0 z-[2] bg-black/5" />
-      <AudioReactiveBackdrop
-        ambientColor={ambientColor}
-        isPlaying={isPlaying}
-        backgroundBlurEnabled={backgroundBlurEnabled}
-      />
+      {dynamicBackgroundEnabled ? (
+        <AudioReactiveBackdrop
+          ambientColor={ambientColor}
+          isPlaying={isPlaying}
+          backgroundBlurEnabled={backgroundBlurEnabled}
+        />
+      ) : null}
 
       {/* Content */}
       <div className="relative z-10 flex h-full min-h-0 flex-col">
@@ -509,18 +520,21 @@ export function NowPlayingSheet({
                     <span className="absolute inset-x-0 top-1/2 h-2 -translate-y-1/2 rounded-full bg-white/22 shadow-[inset_0_0_0_1px_rgba(255,255,255,0.08)]" />
                     <span
                       ref={fillRef}
-                      className="absolute left-0 top-1/2 z-[1] h-2 -translate-y-1/2 overflow-visible rounded-full bg-white"
+                      className="absolute left-0 top-1/2 z-[1] h-2 -translate-y-1/2 overflow-visible rounded-full bg-white [clip-path:inset(-18px_-18px_-18px_0)]"
                       style={{ width: "0%" }}
                     >
-                      <motion.span
-                        className="pointer-events-none absolute inset-y-0 right-2 z-[2] w-10 bg-[linear-gradient(90deg,rgba(255,255,255,0)_0%,rgba(255,255,255,0.14)_58%,rgba(255,255,255,0.68)_100%)]"
-                        animate={shouldReduceMotion ? undefined : { opacity: [0.5, 0.66, 0.5] }}
-                        transition={shouldReduceMotion ? undefined : { duration: 2.1, repeat: Number.POSITIVE_INFINITY, ease: "easeInOut" }}
-                      />
-                      <span className="pointer-events-none absolute inset-y-0 right-0 z-[3] w-3 rounded-full bg-white" />
-                      <span className="pointer-events-none absolute right-0 top-1/2 z-[4] h-2 w-3 -translate-y-1/2">
+                      <span
+                        ref={progressHeadRef}
+                        className="pointer-events-none absolute inset-y-0 right-0 z-[2] w-10 opacity-0"
+                      >
                         <motion.span
-                          className="block h-full w-full rounded-full shadow-[0_0_7px_rgba(255,255,255,0.9),0_0_12px_rgba(255,255,255,0.56)]"
+                          className="absolute inset-y-0 right-2 z-[2] w-10 bg-[linear-gradient(90deg,rgba(255,255,255,0)_0%,rgba(255,255,255,0.14)_58%,rgba(255,255,255,0.68)_100%)]"
+                          animate={shouldReduceMotion ? undefined : { opacity: [0.5, 0.66, 0.5] }}
+                          transition={shouldReduceMotion ? undefined : { duration: 2.1, repeat: Number.POSITIVE_INFINITY, ease: "easeInOut" }}
+                        />
+                        <span className="absolute inset-y-0 right-0 z-[3] w-3 rounded-full bg-white" />
+                        <motion.span
+                          className="absolute right-0 top-1/2 z-[4] block h-2 w-3 -translate-y-1/2 rounded-full shadow-[0_0_7px_rgba(255,255,255,0.9),0_0_12px_rgba(255,255,255,0.56)]"
                           animate={shouldReduceMotion ? undefined : { opacity: [0.72, 0.9, 0.72] }}
                           transition={shouldReduceMotion ? undefined : { duration: 2.1, repeat: Number.POSITIVE_INFINITY, ease: "easeInOut" }}
                         />

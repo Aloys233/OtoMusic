@@ -1,7 +1,9 @@
 import { useEffect } from "react";
 
 import { audioEngine } from "@/lib/audio/AudioEngine";
+import { isElectronRuntime } from "@/lib/desktop-api";
 import { usePlayerStore } from "@/stores/player-store";
+import { useSettingsStore } from "@/stores/settings-store";
 
 function supportsMediaSession() {
   return typeof navigator !== "undefined" && "mediaSession" in navigator;
@@ -21,6 +23,17 @@ function isLinuxDesktop() {
 }
 
 const POSITION_SYNC_INTERVAL_MS = 1_000;
+const SILENT_AUDIO_DATA_URI =
+  "data:audio/wav;base64,UklGRigAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQQAAAAAAA==";
+
+function createSilentMediaSessionAudio() {
+  const audio = new Audio(SILENT_AUDIO_DATA_URI);
+  audio.loop = true;
+  audio.muted = false;
+  audio.volume = 1;
+  audio.preload = "auto";
+  return audio;
+}
 
 export function useMediaSession() {
   const currentTrack = usePlayerStore((state) => state.currentTrack);
@@ -29,6 +42,8 @@ export function useMediaSession() {
   const playPrevious = usePlayerStore((state) => state.playPrevious);
   const setPlaying = usePlayerStore((state) => state.setPlaying);
   const setProgress = usePlayerStore((state) => state.setProgress);
+  const audioPassthroughEnabled = useSettingsStore((state) => state.audioPassthroughEnabled);
+  const playbackSpeed = useSettingsStore((state) => state.playbackSpeed);
 
   useEffect(() => {
     if (!supportsMediaSession()) {
@@ -155,12 +170,40 @@ export function useMediaSession() {
   }, [playNext, playPrevious, setPlaying, setProgress]);
 
   useEffect(() => {
+    if (
+      !supportsMediaSession() ||
+      !isElectronRuntime() ||
+      !audioPassthroughEnabled ||
+      !isPlaying ||
+      !currentTrack?.streamUrl
+    ) {
+      return;
+    }
+
+    const mediaSessionAudio = createSilentMediaSessionAudio();
+    void mediaSessionAudio.play().catch(() => {
+      // Electron/desktop shells can still reject autoplay; action handlers remain registered.
+    });
+
+    return () => {
+      try {
+        mediaSessionAudio.pause();
+        mediaSessionAudio.src = "";
+        mediaSessionAudio.load();
+      } catch {
+        // ignore cleanup failures
+      }
+    };
+  }, [audioPassthroughEnabled, currentTrack?.streamUrl, isPlaying]);
+
+  useEffect(() => {
     if (!supportsMediaSession()) {
       return;
     }
 
     // WebKitGTK on some Linux desktop stacks is unstable with frequent position updates.
-    if (isLinuxDesktop()) {
+    // mpv passthrough needs explicit position updates because the silent media-session anchor has no real timeline.
+    if (isLinuxDesktop() && !audioPassthroughEnabled) {
       return;
     }
 
@@ -178,7 +221,8 @@ export function useMediaSession() {
 
       const now = Date.now();
       const trackId = activeTrack?.id ?? null;
-      const position = Math.min(progress, duration);
+      const currentTime = audioPassthroughEnabled ? audioEngine.getCurrentTime() : progress;
+      const position = Math.max(0, Math.min(currentTime, duration));
       const second = Math.floor(position);
 
       const trackChanged = trackId !== lastTrackId;
@@ -194,7 +238,7 @@ export function useMediaSession() {
         navigator.mediaSession.setPositionState({
           duration,
           position,
-          playbackRate: 1,
+          playbackRate: playbackSpeed,
         });
         lastTrackId = trackId;
         lastDuration = duration;
@@ -206,6 +250,10 @@ export function useMediaSession() {
     };
 
     syncPositionState();
+    const timer = audioPassthroughEnabled
+      ? window.setInterval(syncPositionState, POSITION_SYNC_INTERVAL_MS)
+      : 0;
+
     const unsubscribe = usePlayerStore.subscribe((state, previousState) => {
       if (
         state.currentTrack?.id === previousState.currentTrack?.id &&
@@ -220,6 +268,9 @@ export function useMediaSession() {
 
     return () => {
       unsubscribe();
+      if (timer) {
+        window.clearInterval(timer);
+      }
     };
-  }, []);
+  }, [audioPassthroughEnabled, isPlaying, playbackSpeed]);
 }

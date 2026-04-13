@@ -37,6 +37,8 @@ export type SubsonicSong = {
   path?: string;
   replayGainTrackGain?: number | string;
   replayGainAlbumGain?: number | string;
+  replayGainTrackPeak?: number | string;
+  replayGainAlbumPeak?: number | string;
   starred?: string;
 };
 

@@ -95,6 +95,7 @@ type SettingsState = {
   showTranslatedLyrics: boolean;
   showRomanizedLyrics: boolean;
   nowPlayingBackgroundBlurEnabled: boolean;
+  nowPlayingDynamicBackgroundEnabled: boolean;
   maxCacheGb: number;
   globalShortcutsEnabled: boolean;
   playPauseShortcut: string;
@@ -109,6 +110,7 @@ type SettingsState = {
   replayGainMode: ReplayGainMode;
   playbackSpeed: number;
   fadeDurationSec: number;
+  autoplaySimilarEnabled: boolean;
   setOutputDeviceId: (deviceId: string) => void;
   setAudioPassthroughEnabled: (enabled: boolean) => void;
   setPreampGainDb: (gain: number) => void;
@@ -127,6 +129,7 @@ type SettingsState = {
   setShowTranslatedLyrics: (enabled: boolean) => void;
   setShowRomanizedLyrics: (enabled: boolean) => void;
   setNowPlayingBackgroundBlurEnabled: (enabled: boolean) => void;
+  setNowPlayingDynamicBackgroundEnabled: (enabled: boolean) => void;
   setMaxCacheGb: (value: number) => void;
   setGlobalShortcutsEnabled: (enabled: boolean) => void;
   setPlayPauseShortcut: (accelerator: string) => void;
@@ -141,6 +144,7 @@ type SettingsState = {
   setReplayGainMode: (mode: ReplayGainMode) => void;
   setPlaybackSpeed: (speed: number) => void;
   setFadeDurationSec: (duration: number) => void;
+  setAutoplaySimilarEnabled: (enabled: boolean) => void;
 };
 
 export const useSettingsStore = create<SettingsState>()(
@@ -163,6 +167,7 @@ export const useSettingsStore = create<SettingsState>()(
       showTranslatedLyrics: true,
       showRomanizedLyrics: true,
       nowPlayingBackgroundBlurEnabled: true,
+      nowPlayingDynamicBackgroundEnabled: true,
       maxCacheGb: 1,
       globalShortcutsEnabled: true,
       playPauseShortcut: "MediaPlayPause",
@@ -177,6 +182,7 @@ export const useSettingsStore = create<SettingsState>()(
       replayGainMode: "off",
       playbackSpeed: 1.0,
       fadeDurationSec: 0.2,
+      autoplaySimilarEnabled: false,
       setOutputDeviceId: (outputDeviceId) => set({ outputDeviceId }),
       setAudioPassthroughEnabled: (audioPassthroughEnabled) => set({ audioPassthroughEnabled }),
       setPreampGainDb: (preampGainDb) =>
@@ -215,6 +221,8 @@ export const useSettingsStore = create<SettingsState>()(
       setShowRomanizedLyrics: (showRomanizedLyrics) => set({ showRomanizedLyrics }),
       setNowPlayingBackgroundBlurEnabled: (nowPlayingBackgroundBlurEnabled) =>
         set({ nowPlayingBackgroundBlurEnabled }),
+      setNowPlayingDynamicBackgroundEnabled: (nowPlayingDynamicBackgroundEnabled) =>
+        set({ nowPlayingDynamicBackgroundEnabled }),
       setMaxCacheGb: (maxCacheGb) => set({ maxCacheGb: clamp(maxCacheGb, 0.5, 10) }),
       setGlobalShortcutsEnabled: (globalShortcutsEnabled) => set({ globalShortcutsEnabled }),
       setPlayPauseShortcut: (playPauseShortcut) =>
@@ -232,6 +240,7 @@ export const useSettingsStore = create<SettingsState>()(
       setReplayGainMode: (replayGainMode) => set({ replayGainMode }),
       setPlaybackSpeed: (playbackSpeed) => set({ playbackSpeed: clamp(playbackSpeed, 0.5, 2.0) }),
       setFadeDurationSec: (fadeDurationSec) => set({ fadeDurationSec: clamp(fadeDurationSec, 0.05, 0.5) }),
+      setAutoplaySimilarEnabled: (autoplaySimilarEnabled) => set({ autoplaySimilarEnabled }),
     }),
     {
       name: "otomusic-settings",
@@ -253,6 +262,7 @@ export const useSettingsStore = create<SettingsState>()(
         showTranslatedLyrics: state.showTranslatedLyrics,
         showRomanizedLyrics: state.showRomanizedLyrics,
         nowPlayingBackgroundBlurEnabled: state.nowPlayingBackgroundBlurEnabled,
+        nowPlayingDynamicBackgroundEnabled: state.nowPlayingDynamicBackgroundEnabled,
         maxCacheGb: state.maxCacheGb,
         globalShortcutsEnabled: state.globalShortcutsEnabled,
         playPauseShortcut: state.playPauseShortcut,
@@ -267,6 +277,7 @@ export const useSettingsStore = create<SettingsState>()(
         replayGainMode: state.replayGainMode,
         playbackSpeed: state.playbackSpeed,
         fadeDurationSec: state.fadeDurationSec,
+        autoplaySimilarEnabled: state.autoplaySimilarEnabled,
       }),
     },
   ),

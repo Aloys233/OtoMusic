@@ -16,6 +16,8 @@ import {
 type ReplayGainOptions = {
   trackGainDb?: number | null;
   albumGainDb?: number | null;
+  trackPeak?: number | null;
+  albumPeak?: number | null;
   preferAlbumGain?: boolean;
 };
 
@@ -29,6 +31,7 @@ export type AudioReactiveSnapshot = {
 };
 
 const EQ_BAND_FREQUENCIES = [31, 62, 125, 250, 500, 1000, 2000, 4000, 8000, 16000] as const;
+const DIGITAL_FULL_SCALE_LIMIT_DB = 0;
 
 const EMPTY_AUDIO_REACTIVE_SNAPSHOT: AudioReactiveSnapshot = {
   available: false,
@@ -95,6 +98,10 @@ export class AudioEngine {
   private targetVolume = 0.75;
 
   private preampGainDb = 0;
+
+  private replayGainDb = 0;
+
+  private replayGainPeak: number | null = null;
 
   private equalizerEnabled = false;
 
@@ -309,13 +316,24 @@ export class AudioEngine {
   }
 
   setReplayGainDb(db: number | null | undefined) {
-    const safeDb = typeof db === "number" ? db : 0;
-    const linearGain = Math.pow(10, safeDb / 20);
+    this.replayGainDb = typeof db === "number" && Number.isFinite(db) ? db : 0;
+    this.syncLoudnessGain();
+  }
 
+  setReplayGainPeak(peak: number | null | undefined) {
+    this.replayGainPeak = typeof peak === "number" && Number.isFinite(peak) && peak > 0
+      ? peak
+      : null;
+    this.syncLoudnessGain();
+  }
+
+  private syncLoudnessGain() {
     if (this.passthroughEnabled || !this.context || !this.replayGainNode) {
       return;
     }
 
+    const safeDb = this.resolveAntiClippingReplayGainDb();
+    const linearGain = Math.pow(10, safeDb / 20);
     const now = this.context.currentTime;
     this.replayGainNode.gain.cancelScheduledValues(now);
     this.replayGainNode.gain.setTargetAtTime(linearGain, now, 0.03);
@@ -333,6 +351,7 @@ export class AudioEngine {
     const now = this.context.currentTime;
     this.preampGainNode.gain.cancelScheduledValues(now);
     this.preampGainNode.gain.setTargetAtTime(linearGain, now, 0.03);
+    this.syncLoudnessGain();
   }
 
   setGaplessEnabled(enabled: boolean) {
@@ -616,8 +635,12 @@ export class AudioEngine {
     const db = options.preferAlbumGain
       ? (options.albumGainDb ?? options.trackGainDb)
       : (options.trackGainDb ?? options.albumGainDb);
+    const peak = options.preferAlbumGain
+      ? (options.albumPeak ?? options.trackPeak)
+      : (options.trackPeak ?? options.albumPeak);
 
     this.setReplayGainDb(db ?? 0);
+    this.setReplayGainPeak(peak);
   }
 
   private async ensureInitialized() {
@@ -908,6 +931,22 @@ export class AudioEngine {
     await new Promise((resolve) => setTimeout(resolve, waitMs));
   }
 
+  private resolveAntiClippingReplayGainDb() {
+    const eqHeadroomDb = this.equalizerEnabled
+      ? Math.max(0, ...this.equalizerBands.map((gain) => Number.isFinite(gain) ? gain : 0))
+      : 0;
+
+    if (this.replayGainPeak) {
+      const peakLimitDb = -20 * Math.log10(this.replayGainPeak);
+      return Math.min(this.replayGainDb, peakLimitDb - this.preampGainDb - eqHeadroomDb);
+    }
+
+    return Math.min(
+      this.replayGainDb,
+      DIGITAL_FULL_SCALE_LIMIT_DB - this.preampGainDb - eqHeadroomDb,
+    );
+  }
+
   private syncEqualizerGain(onlyIndex?: number) {
     if (this.passthroughEnabled || !this.context || this.equalizerNodes.length === 0) {
       return;
@@ -922,12 +961,14 @@ export class AudioEngine {
 
     if (typeof onlyIndex === "number" && this.equalizerNodes[onlyIndex]) {
       updateNode(this.equalizerNodes[onlyIndex], onlyIndex);
+      this.syncLoudnessGain();
       return;
     }
 
     this.equalizerNodes.forEach((node, index) => {
       updateNode(node, index);
     });
+    this.syncLoudnessGain();
   }
 
   private isUsingMpvBackend() {

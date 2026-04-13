@@ -18,6 +18,14 @@ function parseGain(value: number | string | undefined) {
   return undefined;
 }
 
+function parsePeak(value: number | string | undefined) {
+  const peak = parseGain(value);
+  if (typeof peak !== "number" || peak <= 0) {
+    return undefined;
+  }
+  return peak;
+}
+
 export function mapSongToTrackInfo(song: SubsonicSong, client: SubsonicClient): TrackInfo {
   const streamQuality = useSettingsStore.getState().streamQuality;
   const maxBitrate = resolveMaxBitrateKbps(streamQuality);
@@ -28,12 +36,15 @@ export function mapSongToTrackInfo(song: SubsonicSong, client: SubsonicClient): 
     artist: song.artist ?? "Unknown Artist",
     album: song.album,
     albumId: song.albumId,
+    genre: song.genre,
     duration: song.duration ?? 0,
     coverArtId: song.coverArt,
     coverUrl: song.coverArt ? client.getCoverArtUrl(song.coverArt, 192) : undefined,
     streamUrl: client.getStreamUrl(song.id, maxBitrate),
     trackGainDb: parseGain(song.replayGainTrackGain),
     albumGainDb: parseGain(song.replayGainAlbumGain),
+    trackPeak: parsePeak(song.replayGainTrackPeak),
+    albumPeak: parsePeak(song.replayGainAlbumPeak),
     bitRate: song.bitRate,
     bitDepth: song.bitDepth,
     sampleRate: song.sampleRate ?? song.samplingRate,

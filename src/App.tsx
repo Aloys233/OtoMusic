@@ -50,11 +50,14 @@ import { createSubsonicClient } from "@/lib/api/client";
 import { cn } from "@/lib/utils";
 import { useAuthStore } from "@/stores/auth-store";
 import { type LibraryNavSection, useLibraryStore } from "@/stores/library-store";
-import { usePlayerStore } from "@/stores/player-store";
+import { type TrackInfo, usePlayerStore } from "@/stores/player-store";
 import { useRecentPlayStore } from "@/stores/recent-play-store";
 import { useSettingsStore } from "@/stores/settings-store";
 import type { SubsonicAlbum, SubsonicSong } from "@/types/subsonic";
 
+
+const AUTOPLAY_SIMILAR_QUEUE_THRESHOLD = 2;
+const AUTOPLAY_SIMILAR_BATCH_SIZE = 12;
 
 type AlbumCard = {
   id: string;
@@ -175,6 +178,10 @@ function matchKeyword(keyword: string, ...values: Array<string | undefined>) {
   return values.some((value) => value?.toLowerCase().includes(normalized));
 }
 
+function normalizeMatchValue(value: string | undefined | null) {
+  return value?.trim().toLowerCase() ?? "";
+}
+
 function normalizeRange(value: number, min: number, max: number, fallback: number) {
   if (!Number.isFinite(value)) {
     return fallback;
@@ -278,6 +285,8 @@ export default function App() {
   const login = useAuthStore((state) => state.login);
   const restoreSecureSession = useAuthStore((state) => state.restoreSecureSession);
   const clearLoginError = useAuthStore((state) => state.clearLoginError);
+  const serverConfig = useAuthStore((state) => state.serverConfig);
+  const autoSwitchActiveUrl = useAuthStore((state) => state.autoSwitchActiveUrl);
 
   const selectedAlbumId = useLibraryStore((state) => state.selectedAlbumId);
   const setSelectedAlbumId = useLibraryStore((state) => state.setSelectedAlbumId);
@@ -289,8 +298,10 @@ export default function App() {
   const currentTrack = usePlayerStore((state) => state.currentTrack);
   const currentTrackId = currentTrack?.id;
   const queue = usePlayerStore((state) => state.queue);
+  const currentIndex = usePlayerStore((state) => state.currentIndex);
   const isPlaying = usePlayerStore((state) => state.isPlaying);
   const setQueue = usePlayerStore((state) => state.setQueue);
+  const appendToQueue = usePlayerStore((state) => state.appendToQueue);
   const setPlaying = usePlayerStore((state) => state.setPlaying);
   const playTrackById = usePlayerStore((state) => state.playTrackById);
   const recentPlays = useRecentPlayStore((state) => state.recentPlays);
@@ -304,6 +315,10 @@ export default function App() {
   const nowPlayingBackgroundBlurEnabled = useSettingsStore(
     (state) => state.nowPlayingBackgroundBlurEnabled,
   );
+  const nowPlayingDynamicBackgroundEnabled = useSettingsStore(
+    (state) => state.nowPlayingDynamicBackgroundEnabled,
+  );
+  const autoplaySimilarEnabled = useSettingsStore((state) => state.autoplaySimilarEnabled);
 
   const [viewportWidth, setViewportWidth] = useState(() =>
     typeof window === "undefined" ? 1280 : window.innerWidth,
@@ -379,13 +394,46 @@ export default function App() {
     };
   }, [searchInput]);
 
+  useEffect(() => {
+    if (!isAuthenticated || !serverConfig || !session?.password) {
+      return;
+    }
+
+    void autoSwitchActiveUrl();
+  }, [autoSwitchActiveUrl, isAuthenticated, serverConfig, session?.password]);
+
+  useEffect(() => {
+    if (!isAuthenticated || !serverConfig || !session?.password) {
+      return;
+    }
+
+    const handleNetworkChange = () => {
+      void autoSwitchActiveUrl();
+    };
+
+    window.addEventListener("online", handleNetworkChange);
+    window.addEventListener("focus", handleNetworkChange);
+    const timer = window.setInterval(handleNetworkChange, 60_000);
+
+    return () => {
+      window.removeEventListener("online", handleNetworkChange);
+      window.removeEventListener("focus", handleNetworkChange);
+      window.clearInterval(timer);
+    };
+  }, [autoSwitchActiveUrl, isAuthenticated, serverConfig, session?.password]);
+
   const client = useMemo(() => {
     if (!isAuthenticated || !session?.password) {
       return null;
     }
 
-    return createSubsonicClient(session);
-  }, [isAuthenticated, session]);
+    return createSubsonicClient({
+      ...session,
+      fallbackUrls: serverConfig
+        ? [serverConfig.primaryUrl, ...serverConfig.fallbackUrls].filter((url) => url !== session.baseUrl)
+        : undefined,
+    });
+  }, [isAuthenticated, serverConfig, session]);
 
   const sessionKey = isAuthenticated && session?.password
     ? `${session.baseUrl}|${session.username}`
@@ -510,6 +558,10 @@ export default function App() {
   const { data: artistInfoData } = useArtistInfo(client, sessionKey, artistDetailArtistId);
 
   const albumCards = useMemo(() => albumData.map(toCardItem), [albumData]);
+  const albumCardById = useMemo(
+    () => new Map(albumCards.map((album) => [album.id, album])),
+    [albumCards],
+  );
 
   const filteredAlbums = useMemo(
     () => albumCards.filter((album) => matchKeyword(searchKeyword, album.title, album.artist, album.genre)),
@@ -588,6 +640,87 @@ export default function App() {
     () => filteredSongs.slice(songPageStart, songPageStart + SONGS_PER_PAGE),
     [filteredSongs, songPageStart],
   );
+
+  const autoplaySimilarQueue = useMemo<TrackInfo[]>(() => {
+    if (!client || !autoplaySimilarEnabled || !currentTrack || allSongsData.length === 0) {
+      return [];
+    }
+
+    const queuedTrackIds = new Set(queue.map((track) => track.id));
+    const currentAlbumId = currentTrack.albumId?.trim() ?? "";
+    const currentGenre = normalizeMatchValue(
+      currentTrack.genre ?? (currentAlbumId ? albumCardById.get(currentAlbumId)?.genre : undefined),
+    );
+    const currentArtistKeys = new Set(
+      currentTrack.artist
+        .split(/\s*[/,;]\s*/)
+        .map((artist) => normalizeMatchValue(artist))
+        .filter(Boolean),
+    );
+
+    return allSongsData
+      .map((song) => {
+        if (queuedTrackIds.has(song.id)) {
+          return null;
+        }
+
+        let score = 0;
+        if (currentAlbumId && song.albumId === currentAlbumId) {
+          score += 6;
+        }
+
+        const songArtistKeys = getSongArtistNames(song).map((artist) => normalizeMatchValue(artist));
+        if (songArtistKeys.some((artist) => currentArtistKeys.has(artist))) {
+          score += 4;
+        }
+
+        const songGenre = normalizeMatchValue(song.genre ?? (song.albumId ? albumCardById.get(song.albumId)?.genre : undefined));
+        if (currentGenre && songGenre === currentGenre) {
+          score += 3;
+        }
+
+        if (score <= 0) {
+          return null;
+        }
+
+        return {
+          song,
+          score,
+          randomScore: hashToUnitInterval(`autoplay:${currentTrack.id}:${song.id}`),
+        };
+      })
+      .filter((entry): entry is { song: SubsonicSong; score: number; randomScore: number } => Boolean(entry))
+      .sort((a, b) => {
+        const scoreGap = b.score - a.score;
+        if (scoreGap !== 0) {
+          return scoreGap;
+        }
+
+        return b.randomScore - a.randomScore;
+      })
+      .slice(0, AUTOPLAY_SIMILAR_BATCH_SIZE)
+      .map((entry) => mapSongToTrackInfo(entry.song, client));
+  }, [albumCardById, allSongsData, autoplaySimilarEnabled, client, currentTrack, queue]);
+
+  useEffect(() => {
+    if (!autoplaySimilarEnabled || !isPlaying || currentIndex < 0 || autoplaySimilarQueue.length === 0) {
+      return;
+    }
+
+    const remainingTracks = queue.length - currentIndex - 1;
+    if (remainingTracks > AUTOPLAY_SIMILAR_QUEUE_THRESHOLD) {
+      return;
+    }
+
+    appendToQueue(autoplaySimilarQueue);
+  }, [
+    appendToQueue,
+    autoplaySimilarEnabled,
+    autoplaySimilarQueue,
+    currentIndex,
+    isPlaying,
+    queue.length,
+  ]);
 
   useEffect(() => {
     if (songPageIndex === currentSongPageIndex) {
@@ -3925,6 +4058,7 @@ export default function App() {
               showTranslatedLyrics={showTranslatedLyrics}
               showRomanizedLyrics={showRomanizedLyrics}
               backgroundBlurEnabled={nowPlayingBackgroundBlurEnabled}
+              dynamicBackgroundEnabled={nowPlayingDynamicBackgroundEnabled}
               highResCoverUrl={nowPlayingHighResCoverUrl}
               onClose={handleCloseNowPlayingSheet}
               onSelectTrack={handleSelectQueueTrack}

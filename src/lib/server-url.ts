@@ -1,5 +1,7 @@
 const URL_SCHEME_PATTERN = /^[a-z][a-z\d+\-.]*:\/\//i;
 
+export type ServerNetworkKind = "lan" | "public";
+
 function shouldDefaultToHttp(input: string) {
   const host = input.toLowerCase();
   if (host.startsWith("localhost")) return true;
@@ -86,4 +88,67 @@ export function normalizeServerBaseUrl(raw: string) {
   parsed.search = "";
 
   return `${parsed.protocol}//${parsed.host}${normalizePathname(parsed.pathname)}`;
+}
+
+function isPrivateIpv4(hostname: string) {
+  const parts = hostname.split(".").map((part) => Number.parseInt(part, 10));
+  if (parts.length !== 4 || parts.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) {
+    return false;
+  }
+
+  const [a, b] = parts;
+  if (a === 10) return true;
+  if (a === 127) return true;
+  if (a === 169 && b === 254) return true;
+  if (a === 172 && b >= 16 && b <= 31) return true;
+  if (a === 192 && b === 168) return true;
+  return false;
+}
+
+function isPrivateIpv6(hostname: string) {
+  const host = hostname.toLowerCase();
+  if (host === "::1" || host === "0:0:0:0:0:0:0:1") return true;
+  if (host.startsWith("fc") || host.startsWith("fd")) return true;
+  if (host.startsWith("fe80:")) return true;
+  return false;
+}
+
+export function getServerNetworkKind(rawUrl: string): ServerNetworkKind {
+  try {
+    const parsed = new URL(normalizeServerBaseUrl(rawUrl));
+    const hostname = parsed.hostname.replace(/^\[|\]$/g, "").toLowerCase();
+
+    if (
+      hostname === "localhost" ||
+      hostname.endsWith(".local") ||
+      hostname.endsWith(".lan") ||
+      hostname.endsWith(".home") ||
+      hostname.endsWith(".home.arpa")
+    ) {
+      return "lan";
+    }
+
+    if (isPrivateIpv4(hostname) || isPrivateIpv6(hostname)) {
+      return "lan";
+    }
+  } catch {
+    // Invalid addresses are treated as public for display/sorting only.
+  }
+
+  return "public";
+}
+
+export function getServerNetworkLabel(rawUrl: string) {
+  return getServerNetworkKind(rawUrl) === "lan" ? "局域网" : "公网";
+}
+
+export function sortServerUrlsByNetwork(urls: string[]) {
+  return [...urls].sort((a, b) => {
+    const kindA = getServerNetworkKind(a);
+    const kindB = getServerNetworkKind(b);
+    if (kindA !== kindB) {
+      return kindA === "lan" ? -1 : 1;
+    }
+    return 0;
+  });
 }

@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { persist } from "zustand/middleware";
 
 type RepeatMode = "off" | "all" | "one";
 
@@ -8,12 +9,15 @@ export type TrackInfo = {
   artist: string;
   album?: string;
   albumId?: string;
+  genre?: string;
   duration: number;
   streamUrl?: string;
   coverArtId?: string;
   coverUrl?: string;
   trackGainDb?: number;
   albumGainDb?: number;
+  trackPeak?: number;
+  albumPeak?: number;
   bitRate?: number;
   bitDepth?: number;
   sampleRate?: number;
@@ -32,6 +36,7 @@ type PlayerState = {
   shuffleHistory: string[];
   setCurrentTrack: (track: TrackInfo | null) => void;
   setQueue: (queue: TrackInfo[], startIndex?: number) => void;
+  appendToQueue: (tracks: TrackInfo[]) => void;
   playTrackById: (trackId: string) => void;
   playNext: () => boolean;
   playPrevious: () => boolean;
@@ -42,18 +47,20 @@ type PlayerState = {
   toggleShuffle: () => void;
 };
 
-export const usePlayerStore = create<PlayerState>((set, get) => ({
-  currentTrack: null,
-  queue: [],
-  currentIndex: -1,
-  isPlaying: false,
-  volume: 0.75,
-  progress: 0,
-  repeatMode: "off",
-  shuffle: false,
-  shuffleHistory: [],
-  setCurrentTrack: (currentTrack) =>
-    set((state) => {
+export const usePlayerStore = create<PlayerState>()(
+  persist(
+    (set, get) => ({
+      currentTrack: null,
+      queue: [],
+      currentIndex: -1,
+      isPlaying: false,
+      volume: 0.75,
+      progress: 0,
+      repeatMode: "off",
+      shuffle: false,
+      shuffleHistory: [],
+      setCurrentTrack: (currentTrack) =>
+        set((state) => {
       if (!currentTrack) {
         return {
           currentTrack: null,
@@ -70,9 +77,9 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
         progress: 0,
         shuffleHistory: [currentTrack.id],
       };
-    }),
-  setQueue: (queue, startIndex = 0) =>
-    set(() => {
+        }),
+      setQueue: (queue, startIndex = 0) =>
+        set(() => {
       const safeIndex = queue.length === 0
         ? -1
         : Math.max(0, Math.min(startIndex, queue.length - 1));
@@ -84,9 +91,21 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
         progress: 0,
         shuffleHistory: currentTrack ? [currentTrack.id] : [],
       };
-    }),
-  playTrackById: (trackId) =>
-    set((state) => {
+        }),
+      appendToQueue: (tracks) =>
+        set((state) => {
+          const existingIds = new Set(state.queue.map((track) => track.id));
+          const nextTracks = tracks.filter((track) => !existingIds.has(track.id));
+          if (nextTracks.length === 0) {
+            return state;
+          }
+
+          return {
+            queue: [...state.queue, ...nextTracks],
+          };
+        }),
+      playTrackById: (trackId) =>
+        set((state) => {
       const nextIndex = state.queue.findIndex((track) => track.id === trackId);
       if (nextIndex < 0) {
         return state;
@@ -98,17 +117,17 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
         progress: 0,
         shuffleHistory: [trackId],
       };
-    }),
-  playNext: () => {
-    const state = get();
-    const {
-      queue,
-      currentIndex,
-      shuffle,
-      repeatMode,
-      currentTrack,
-      shuffleHistory,
-    } = state;
+        }),
+      playNext: () => {
+        const state = get();
+        const {
+          queue,
+          currentIndex,
+          shuffle,
+          repeatMode,
+          currentTrack,
+          shuffleHistory,
+        } = state;
 
     if (queue.length === 0) {
       return false;
@@ -180,10 +199,10 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
         : [],
     });
     return true;
-  },
-  playPrevious: () => {
-    const state = get();
-    const { queue, currentIndex, repeatMode, shuffle, shuffleHistory } = state;
+      },
+      playPrevious: () => {
+        const state = get();
+        const { queue, currentIndex, repeatMode, shuffle, shuffleHistory } = state;
 
     if (queue.length === 0) {
       return false;
@@ -223,17 +242,38 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
       shuffleHistory: queue[nextIndex] ? [queue[nextIndex].id] : [],
     });
     return true;
-  },
-  setPlaying: (isPlaying) => set({ isPlaying }),
-  setVolume: (volume) => set({ volume: Math.max(0, Math.min(1, volume)) }),
-  setProgress: (progress) => set({ progress: Math.max(0, progress) }),
-  setRepeatMode: (repeatMode) => set({ repeatMode }),
-  toggleShuffle: () =>
-    set((state) => {
+      },
+      setPlaying: (isPlaying) => set({ isPlaying }),
+      setVolume: (volume) => set({ volume: Math.max(0, Math.min(1, volume)) }),
+      setProgress: (progress) => set({ progress: Math.max(0, progress) }),
+      setRepeatMode: (repeatMode) => set({ repeatMode }),
+      toggleShuffle: () =>
+        set((state) => {
       const nextShuffle = !state.shuffle;
       return {
         shuffle: nextShuffle,
         shuffleHistory: nextShuffle && state.currentTrack ? [state.currentTrack.id] : [],
       };
+        }),
     }),
-}));
+    {
+      name: "otomusic-player",
+      partialize: (state) => ({
+        volume: state.volume,
+        repeatMode: state.repeatMode,
+        shuffle: state.shuffle,
+      }),
+      onRehydrateStorage: () => (state) => {
+        usePlayerStore.setState({
+          currentTrack: null,
+          queue: [],
+          currentIndex: -1,
+          isPlaying: false,
+          progress: 0,
+          shuffleHistory: [],
+          volume: Math.max(0, Math.min(1, state?.volume ?? 0.75)),
+        });
+      },
+    },
+  ),
+);

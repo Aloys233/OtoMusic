@@ -3,7 +3,7 @@ import { persist } from "zustand/middleware";
 
 import { createSubsonicClient } from "@/lib/api/client";
 import { clearSecureSession, loadSecureSession, saveSecureSession } from "@/lib/desktop-api";
-import { normalizeServerBaseUrl } from "@/lib/server-url";
+import { getServerNetworkKind, normalizeServerBaseUrl, sortServerUrlsByNetwork } from "@/lib/server-url";
 
 export type AuthSession = {
   baseUrl: string;
@@ -34,6 +34,7 @@ type AuthState = {
   addFallbackUrl: (url: string) => void;
   removeFallbackUrl: (url: string) => void;
   switchActiveUrl: (url: string) => Promise<boolean>;
+  autoSwitchActiveUrl: () => Promise<boolean>;
   logout: () => void;
   clearLoginError: () => void;
 };
@@ -77,6 +78,80 @@ function isNetworkError(error: unknown): boolean {
   return false;
 }
 
+function normalizeUniqueServerUrls(urls: string[]) {
+  const normalized: string[] = [];
+  for (const url of urls) {
+    try {
+      const nextUrl = normalizeServerBaseUrl(url);
+      if (!normalized.includes(nextUrl)) {
+        normalized.push(nextUrl);
+      }
+    } catch {
+      // 跳过无效地址。
+    }
+  }
+  return normalized;
+}
+
+function getServerConfigUrls(config: ServerConfig | null, currentBaseUrl: string) {
+  return normalizeUniqueServerUrls([
+    currentBaseUrl,
+    config?.primaryUrl ?? "",
+    ...(config?.fallbackUrls ?? []),
+  ]);
+}
+
+async function selectBestReachableUrl(session: AuthSession, candidateUrls: string[]) {
+  const urls = sortServerUrlsByNetwork(normalizeUniqueServerUrls(candidateUrls));
+  if (urls.length === 0) {
+    throw new Error("没有可用的服务器地址");
+  }
+
+  const probes = await Promise.all(
+    urls.map(async (url) => {
+      const startedAt = performance.now();
+      try {
+        const client = createSubsonicClient({
+          ...session,
+          baseUrl: url,
+          timeoutMs: 4_000,
+        });
+        await client.ping();
+        return {
+          url,
+          kind: getServerNetworkKind(url),
+          elapsedMs: performance.now() - startedAt,
+          error: null,
+        };
+      } catch (error) {
+        return {
+          url,
+          kind: getServerNetworkKind(url),
+          elapsedMs: Number.POSITIVE_INFINITY,
+          error,
+        };
+      }
+    }),
+  );
+
+  const reachable = probes
+    .filter((probe) => probe.error === null)
+    .sort((a, b) => {
+      if (a.kind !== b.kind) {
+        return a.kind === "lan" ? -1 : 1;
+      }
+      return a.elapsedMs - b.elapsedMs;
+    });
+
+  if (reachable[0]) {
+    return reachable[0].url;
+  }
+
+  const authOrServerError = probes.find((probe) => probe.error && !isNetworkError(probe.error));
+  const lastError = authOrServerError?.error ?? probes[0]?.error;
+  throw lastError instanceof Error ? lastError : new Error("服务器地址均不可用");
+}
+
 export const useAuthStore = create<AuthState>()(
   persist(
     (set, get) => ({
@@ -105,72 +180,39 @@ export const useAuthStore = create<AuthState>()(
 
         set({ isLoggingIn: true, loginError: null });
 
-        const urlsToTry = [normalized.baseUrl];
         const config = get().serverConfig;
-        if (config) {
-          for (const fallback of config.fallbackUrls) {
-            try {
-              const normalizedFallback = normalizeServerBaseUrl(fallback);
-              if (!urlsToTry.includes(normalizedFallback)) {
-                urlsToTry.push(normalizedFallback);
-              }
-            } catch {
-              // 跳过无效备用地址
-            }
-          }
+        const urlsToTry = getServerConfigUrls(config, normalized.baseUrl);
+
+        try {
+          const url = await selectBestReachableUrl(normalized, urlsToTry);
+
           try {
-            const normalizedPrimary = normalizeServerBaseUrl(config.primaryUrl);
-            if (!urlsToTry.includes(normalizedPrimary)) {
-              urlsToTry.push(normalizedPrimary);
-            }
-          } catch {
-            // 跳过无效主地址
-          }
-        }
-
-        let lastError: unknown = null;
-
-        for (const url of urlsToTry) {
-          try {
-            const client = createSubsonicClient({
-              ...normalized,
-              baseUrl: url,
-            });
-            await client.ping();
-
-            try {
-              await saveSecureSession({ ...normalized, baseUrl: url });
-            } catch (error) {
-              console.warn(
-                "[OtoMusic] secure credential storage unavailable",
-                error instanceof Error ? error.message : error,
-              );
-            }
-
-            set({
-              session: { ...normalized, baseUrl: url },
-              isAuthenticated: true,
-              isLoggingIn: false,
-              loginError: null,
-            });
-
-            return true;
+            await saveSecureSession({ ...normalized, baseUrl: url });
           } catch (error) {
-            lastError = error;
-            if (!isNetworkError(error)) {
-              break;
-            }
+            console.warn(
+              "[OtoMusic] secure credential storage unavailable",
+              error instanceof Error ? error.message : error,
+            );
           }
-        }
 
-        set((state) => ({
-          isLoggingIn: false,
-          isAuthenticated: state.isAuthenticated,
-          session: state.session,
-          loginError:
-            lastError instanceof Error ? lastError.message : "登录失败，请检查服务器地址与账号信息",
-        }));
-        return false;
+          set({
+            session: { ...normalized, baseUrl: url },
+            isAuthenticated: true,
+            isLoggingIn: false,
+            loginError: null,
+          });
+
+          return true;
+        } catch (error) {
+          set((state) => ({
+            isLoggingIn: false,
+            isAuthenticated: state.isAuthenticated,
+            session: state.session,
+            loginError:
+              error instanceof Error ? error.message : "登录失败，请检查服务器地址与账号信息",
+          }));
+          return false;
+        }
       },
       restoreSecureSession: async () => {
         const state = get();
@@ -195,12 +237,15 @@ export const useAuthStore = create<AuthState>()(
           }
 
           const normalized = normalizeSession(candidate);
-          const client = createSubsonicClient(normalized);
-          await client.ping();
+          const activeBaseUrl = await selectBestReachableUrl(
+            normalized,
+            getServerConfigUrls(state.serverConfig, normalized.baseUrl),
+          );
+          const activeSession = { ...normalized, baseUrl: activeBaseUrl };
 
-          if (!secureSession) {
+          if (!secureSession || activeSession.baseUrl !== normalized.baseUrl) {
             try {
-              await saveSecureSession(normalized);
+              await saveSecureSession(activeSession);
             } catch (error) {
               console.warn(
                 "[OtoMusic] failed to migrate credentials into secure storage",
@@ -210,7 +255,7 @@ export const useAuthStore = create<AuthState>()(
           }
 
           set({
-            session: normalized,
+            session: activeSession,
             isAuthenticated: true,
             isRestoringSession: false,
             loginError: null,
@@ -328,6 +373,38 @@ export const useAuthStore = create<AuthState>()(
             isLoggingIn: false,
             loginError: error instanceof Error ? error.message : "切换地址失败",
           });
+          return false;
+        }
+      },
+      autoSwitchActiveUrl: async () => {
+        const state = get();
+        if (!state.session) return false;
+
+        try {
+          const bestUrl = await selectBestReachableUrl(
+            state.session,
+            getServerConfigUrls(state.serverConfig, state.session.baseUrl),
+          );
+
+          if (bestUrl === state.session.baseUrl) {
+            return true;
+          }
+
+          try {
+            await saveSecureSession({ ...state.session, baseUrl: bestUrl });
+          } catch (error) {
+            console.warn(
+              "[OtoMusic] failed to update secure credentials",
+              error instanceof Error ? error.message : error,
+            );
+          }
+
+          set({
+            session: { ...state.session, baseUrl: bestUrl },
+            loginError: null,
+          });
+          return true;
+        } catch {
           return false;
         }
       },
