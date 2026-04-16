@@ -15,13 +15,28 @@ jobs:
         include:
           - platform: "macos-latest"
             os_name: "macos"
-            args: "--mac dmg --universal"
+            arch: "x64"
+            args: "--mac dmg --x64"
+          - platform: "macos-latest"
+            os_name: "macos"
+            arch: "arm64"
+            args: "--mac dmg --arm64"
           - platform: "ubuntu-22.04"
             os_name: "linux"
+            arch: "x64"
             args: "--linux AppImage deb rpm tar.gz --x64"
+          - platform: "ubuntu-22.04"
+            os_name: "linux"
+            arch: "arm64"
+            args: "--linux AppImage deb rpm tar.gz --arm64"
           - platform: "windows-latest"
             os_name: "windows"
+            arch: "x64"
             args: "--win nsis msi --x64"
+          - platform: "windows-latest"
+            os_name: "windows"
+            arch: "arm64"
+            args: "--win nsis msi --arm64"
 
     runs-on: ${{ matrix.platform }}
     env:
@@ -61,25 +76,23 @@ jobs:
           VERSION=${VERSION#v} # 去掉前面的 v 前缀，例如 v0.0.4 -> 0.0.4
           
           if [ "${{ matrix.os_name }}" = "windows" ]; then
-            MSI_PATH=$(find release -name "*.msi" -type f | head -n 1)
-            EXE_PATH=$(find release -name "*.exe" -type f | head -n 1)
-            if [ -n "$MSI_PATH" ]; then cp "$MSI_PATH" "artifacts/OtoMusic-${VERSION}-windows-x64-setup.msi"; fi
-            if [ -n "$EXE_PATH" ]; then cp "$EXE_PATH" "artifacts/OtoMusic-${VERSION}-windows-x64-setup.exe"; fi
+            MSI_PATH=$(find release -maxdepth 1 -name "*.msi" -type f | head -n 1)
+            EXE_PATH=$(find release -maxdepth 1 -name "*.exe" -type f | head -n 1)
+            if [ -n "$MSI_PATH" ]; then cp "$MSI_PATH" "artifacts/OtoMusic-${VERSION}-windows-${{ matrix.arch }}-setup.msi"; fi
+            if [ -n "$EXE_PATH" ]; then cp "$EXE_PATH" "artifacts/OtoMusic-${VERSION}-windows-${{ matrix.arch }}-setup.exe"; fi
           elif [ "${{ matrix.os_name }}" = "macos" ]; then
-            DMG_PATH=$(find release -name "*.dmg" -type f | head -n 1)
-            if [ -n "$DMG_PATH" ]; then cp "$DMG_PATH" "artifacts/OtoMusic-${VERSION}-macos-universal.dmg"; fi
+            DMG_PATH=$(find release -maxdepth 1 -name "*.dmg" -type f | head -n 1)
+            if [ -n "$DMG_PATH" ]; then cp "$DMG_PATH" "artifacts/OtoMusic-${VERSION}-macos-${{ matrix.arch }}.dmg"; fi
           elif [ "${{ matrix.os_name }}" = "linux" ]; then
-            DEB_PATH=$(find release -name "*.deb" -type f | head -n 1)
-            RPM_PATH=$(find release -name "*.rpm" -type f | head -n 1)
-            APPIMAGE_PATH=$(find release -name "*.AppImage" -type f | head -n 1)
-            TAR_PATH=$(find release -name "*.tar.gz" -type f | head -n 1)
-            if [ -n "$DEB_PATH" ]; then cp "$DEB_PATH" "artifacts/OtoMusic-${VERSION}-linux-amd64.deb"; fi
-            if [ -n "$RPM_PATH" ]; then cp "$RPM_PATH" "artifacts/OtoMusic-${VERSION}-linux-x86_64.rpm"; fi
-            if [ -n "$APPIMAGE_PATH" ]; then cp "$APPIMAGE_PATH" "artifacts/OtoMusic-${VERSION}-linux-x86_64.AppImage"; fi
-            if [ -n "$TAR_PATH" ]; then cp "$TAR_PATH" "artifacts/OtoMusic-${VERSION}-linux-x86_64.tar.gz"; fi
+            DEB_PATH=$(find release -maxdepth 1 -name "*.deb" -type f | head -n 1)
+            RPM_PATH=$(find release -maxdepth 1 -name "*.rpm" -type f | head -n 1)
+            APPIMAGE_PATH=$(find release -maxdepth 1 -name "*.AppImage" -type f | head -n 1)
+            TAR_PATH=$(find release -maxdepth 1 -name "*.tar.gz" -type f | head -n 1)
+            if [ -n "$DEB_PATH" ]; then cp "$DEB_PATH" "artifacts/OtoMusic-${VERSION}-linux-${{ matrix.arch }}.deb"; fi
+            if [ -n "$RPM_PATH" ]; then cp "$RPM_PATH" "artifacts/OtoMusic-${VERSION}-linux-${{ matrix.arch }}.rpm"; fi
+            if [ -n "$APPIMAGE_PATH" ]; then cp "$APPIMAGE_PATH" "artifacts/OtoMusic-${VERSION}-linux-${{ matrix.arch }}.AppImage"; fi
+            if [ -n "$TAR_PATH" ]; then cp "$TAR_PATH" "artifacts/OtoMusic-${VERSION}-linux-${{ matrix.arch }}.tar.gz"; fi
           fi
-
-          (cd artifacts && sha256sum * > "OtoMusic-${VERSION}-${{ matrix.os_name }}-SHA256SUMS.txt")
 
       - name: upload release
         uses: softprops/action-gh-release@v2
