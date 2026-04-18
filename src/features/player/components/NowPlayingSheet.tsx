@@ -418,15 +418,16 @@ export function NowPlayingSheet({
         </div>
 
         {/* Main content grid */}
-        <div className="grid min-h-0 flex-1 gap-2 px-4 pb-4 lg:grid-cols-[minmax(0,0.42fr)_minmax(0,0.58fr)] lg:gap-5 lg:px-7">
+        <div className="grid min-h-0 flex-1 gap-2 px-4 pb-[4.25rem] lg:grid-cols-[minmax(0,0.42fr)_minmax(0,0.58fr)] lg:gap-5 lg:px-7">
           {/* Left: Player panel */}
-          <section className="flex min-h-0 flex-col items-center justify-center gap-4 px-2 text-white lg:px-4">
+          <section className="relative min-h-0 px-2 text-white lg:px-4">
             {!currentTrack ? (
               <div className="flex h-full items-center justify-center text-sm text-white/70">
                 还没有正在播放的歌曲
               </div>
             ) : (
               <>
+                <div className="absolute left-1/2 top-1/2 flex w-full max-w-[22rem] -translate-x-1/2 -translate-y-1/2 flex-col items-center gap-4 px-2">
                 {/* Album art */}
                 <div className="w-full max-w-[16rem] sm:max-w-[18rem] lg:max-w-[20rem]">
                   <div className="relative aspect-square overflow-hidden rounded-[1.5rem] bg-white/10 shadow-[0_32px_90px_rgba(0,0,0,0.62)] ring-1 ring-white/15">
@@ -496,6 +497,9 @@ export function NowPlayingSheet({
                     </p>
                   )}
                 </div>
+                </div>
+
+                <div className="absolute inset-x-2 bottom-[clamp(1.25rem,5vh,3rem)] flex flex-col items-center gap-3 lg:inset-x-4">
 
                 {/* Progress bar */}
                 <div className="flex w-full max-w-[22rem] items-center gap-2.5">
@@ -634,12 +638,13 @@ export function NowPlayingSheet({
                     ))}
                   </div>
                 ) : null}
+                </div>
               </>
             )}
           </section>
 
           {/* Right: Lyrics (full coverage) */}
-          <section className="min-h-0 overflow-hidden text-white">
+          <section className="relative min-h-0 overflow-hidden text-white">
             {!currentTrack ? (
               <div className="flex h-full items-center justify-center text-sm text-white/70">
                 播放歌曲后显示歌词
@@ -659,7 +664,7 @@ export function NowPlayingSheet({
                 align={lyricsAlign}
                 showTranslatedLyrics={showTranslatedLyrics}
                 showRomanizedLyrics={showRomanizedLyrics}
-                className="h-full"
+                className="np-now-playing-lyrics h-full"
               />
             ) : (
               <div className="flex h-full items-center justify-center text-sm text-white/70">
